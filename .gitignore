@@ -1,0 +1,52 @@
+# Large binary and raw data files
+data/raw/**/*.zip
+data/raw/**/*.shp
+data/raw/**/*.dbf
+data/raw/**/*.shx
+data/raw/**/*.prj
+data/raw/**/*.qpj
+data/raw/**/*.cpg
+data/raw/**/*.sbn
+data/raw/**/*.sbx
+data/raw/**/*.fbn
+data/raw/**/*.fbx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.ipynb_checkpoints/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+*.log
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Large data files
+*.parquet
+data/raw/**/*.xlsx
+data/raw/**/*.xls
+data/raw/**/*.pdf
+
+# DO NOT ignore deliverables
+# output/*.csv — these are deliverables
+# visualization/*.html — deliverable
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
