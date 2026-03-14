@@ -1,6 +1,6 @@
 # IE Sustainability Datathon March 2026 — Intelligent Electric Mobility (Iberdrola)
 
-**Team:** [TEAM_NAME]
+**Team:** Greenlabs
 
 Optimal placement of EV charging stations along Spain's interurban road network for 2027, incorporating electrical grid capacity constraints.
 
