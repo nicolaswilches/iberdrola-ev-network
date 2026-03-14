@@ -138,11 +138,83 @@ This guide explains what each raw data source is, where it came from, and what i
 - Use it for: policy justification in the report and for explaining the 60 km spacing logic.
 - Do not use it for: numeric demand modeling.
 
+### Safe parking areas (official Hermes)
+- Official URL: `https://mapas.fomento.gob.es/VisorHermes/`
+- Service layer: `https://mapas.fomento.gob.es/arcgis2/rest/services/Hermes/2_INSTALACIONES_Y_SERVICIOS/MapServer/1354`
+- Local file: `data/raw/additional/hermes_parking_areas/hermes_safe_parking_areas.geojson`
+- What it is: official certified safe and secure parking areas (AESP) on Spanish highways. Includes parking capacity, security level (Gold/Silver/Bronze), and available services.
+- Use it for: secondary candidate locations for EV chargers on long-haul routes, especially for overnight charging scenarios. These sites already have infrastructure, security, and highway access.
+- Records: 12 certified parking areas.
+
+## Fuel Station Infrastructure
+
+### MITECO gas station locations (official Ministry of Ecological Transition)
+- Official API: `https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/`
+- Official data catalogue: `https://datos.gob.es/en/catalogo/e05068001-precio-de-carburantes-en-las-gasolineras-espanolas`
+- Local files:
+  - `data/raw/additional/miteco_gas_stations/miteco_gas_stations_raw.json` (full API response)
+  - `data/raw/additional/miteco_gas_stations/miteco_gas_stations.csv` (cleaned, key fields)
+  - `data/raw/additional/miteco_gas_stations/miteco_gas_stations.geojson` (geocoded points)
+- What it is: official registry of all 12,216 fuel stations in Spain with precise coordinates, brand, province, municipality, address, and operating hours.
+- Use it for: identifying candidate EV charger locations on interurban roads. Gas stations are ideal co-location sites because they already have land, highway access, services, and customer flow. Filter by `road_side` and proximity to interurban roads to find the best candidates.
+- Do not use it for: assuming all gas stations are viable EV sites. Cross-reference with grid capacity to check electrical feasibility.
+- Records: 12,214 geocoded stations across all 52 provinces.
+
+## Administrative Boundaries
+
+### Spain province boundaries
+- Source: derived from IGN (Instituto Geográfico Nacional) via CartoDB open data
+- Local file: `data/raw/additional/ign_boundaries/spain_provinces.geojson`
+- What it is: polygon boundaries for all 52 Spanish provinces with province codes (`cod_prov`) and autonomous community codes (`cod_ccaa`).
+- Use it for: spatial joins between point data (stations, traffic counts, gas stations) and province-level statistics (tourism, population aggregates). Essential for connecting INE province-level data to geographic locations.
+- Records: 52 province polygons.
+
+### Spain autonomous community boundaries
+- Source: derived from IGN (Instituto Geográfico Nacional) via CartoDB open data
+- Local file: `data/raw/additional/ign_boundaries/spain_ccaa.geojson`
+- What it is: polygon boundaries for all 19 Spanish autonomous communities/cities with CCAA codes (`cod_ccaa`).
+- Use it for: regional-level aggregation, visualization by autonomous community, and policy-relevant geographic grouping.
+- Records: 19 CCAA polygons.
+
+## Electricity System Context
+
+### REE national electricity demand (official REE public API)
+- Official API: `https://apidatos.ree.es`
+- API documentation: `https://www.ree.es/en/apidatos`
+- Local files:
+  - `data/raw/additional/ree_demand/ree_national_demand_2024.json` (raw API response)
+  - `data/raw/additional/ree_demand/ree_national_demand_2024_monthly.csv` (monthly MWh)
+- What it is: official monthly electricity demand for peninsular Spain in 2024.
+- Use it for: understanding seasonal electricity demand patterns and identifying months where grid is already under pressure. Helps contextualize whether summer tourism peaks align with grid stress.
+- Records: 12 monthly values.
+
+### REE installed generation capacity by technology (official REE public API)
+- Official API: `https://apidatos.ree.es/en/datos/generacion/potencia-instalada`
+- Local files:
+  - `data/raw/additional/ree_demand/ree_installed_capacity_2024.json` (raw API response)
+  - `data/raw/additional/ree_demand/ree_installed_capacity_2024.csv` (by technology)
+- What it is: official breakdown of Spain's 136 GW installed generation capacity by technology (solar PV, wind, combined cycle, hydro, nuclear, etc.).
+- Use it for: grid context in the report and presentation. Shows Spain's energy mix and renewable capacity, which supports the narrative that EV charging can be powered by clean energy.
+- Records: 17 technology categories.
+
+### REE hourly demand profiles (official REE public API)
+- Official API: `https://apidatos.ree.es/en/datos/demanda/demanda-tiempo-real`
+- Local files:
+  - `data/raw/additional/ree_demand/ree_hourly_demand_profile_summer.json` (July 15, 2024)
+  - `data/raw/additional/ree_demand/ree_hourly_demand_profile_winter.json` (January 15, 2024)
+  - `data/raw/additional/ree_demand/ree_hourly_demand_profiles.csv` (combined hourly CSV)
+- What it is: hourly real, forecasted, and scheduled electricity demand for representative summer and winter days.
+- Use it for: understanding daily demand curves and identifying off-peak windows for smart charging strategies. Shows how EV charging at night or midday (solar peak) could complement grid operations.
+- Records: 1,728 hourly values (2 days x 3 series x 288 5-min intervals).
+
 ## Practical Workflow Recommendation
 
 If you want the leanest high-value pipeline:
 - Use `hermes_roads.geojson` + `hermes_traffic_count_stations.geojson` + EV forecast for route demand.
 - Use `ine_population_municipal_2025.csv` and `ine_hotel_occupancy_provinces_2024_monthly.csv` to justify local demand scaling and seasonality.
+- Use `spain_provinces.geojson` to spatially join point data with province-level statistics.
 - Use NAP chargers and Hermes service areas for baseline vs candidate comparison.
+- Use `miteco_gas_stations.geojson` as candidate sites — filter to stations near interurban roads for co-location opportunities.
 - Use DSO capacity files for nearest-grid feasibility.
-- Use REE files only as transmission-context evidence, not as the main spatial grid layer.
+- Use REE demand and capacity files for grid-context evidence in the report and friction-point narratives.
+- Use `ree_hourly_demand_profiles.csv` to identify optimal charging windows in the report.
