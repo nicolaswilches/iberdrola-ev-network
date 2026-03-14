@@ -53,6 +53,38 @@ This note maps the datathon brief to the datasets currently present in `data/raw
   - The CSV was derived directly from `pobmun25.xlsx`.
   - Columns: `cpro`, `provincia`, `cmun`, `nombre`, `pob_2025`, `hombres`, `mujeres`, `municipality_code`
 
+### 6. INE tourism seasonality
+- Local files:
+  - `data/raw/additional/ine_population/ine_hotel_occupancy_provinces_2024_raw.csv`
+  - `data/raw/additional/ine_population/ine_hotel_occupancy_provinces_2024_monthly.csv`
+  - `data/raw/additional/ine_population/ine_hotel_travelers_overnights_provinces_raw.csv`
+  - `data/raw/additional/ine_population/ine_hotel_travelers_overnights_provinces_2025_monthly.csv`
+- Status: usable
+- Official sources:
+  - Occupancy table page: `https://www.ine.es/jaxi/Tabla.htm?tpx=75843`
+  - Occupancy direct CSV: `https://www.ine.es/jaxi/files/tpx/es/csv_bd/75843.csv`
+  - Travelers / overnights table page: `https://www.ine.es/jaxiT3/Tabla.htm?t=2074&L=0`
+  - Travelers / overnights direct CSV: `https://www.ine.es/jaxiT3/files/t/es/csv_bd/2074.csv`
+- Notes:
+  - The occupancy file is the cleanest source for `seasonal_multiplier`.
+  - The travelers / overnights file adds a second tourism-pressure signal at province-month level.
+
+### 7. REE transmission context
+- Local files:
+  - `data/raw/additional/ree_grid/ree_generation_capacity_nodes_2026_03_02_raw.csv`
+  - `data/raw/additional/ree_grid/ree_generation_capacity_nodes_2026_03_02_key_fields.csv`
+  - `data/raw/additional/ree_grid/ree_demand_requests_2026_02_raw.xlsx`
+  - `data/raw/additional/ree_grid/ree_demand_requests_2026_02.csv`
+- Status: usable with limitations
+- Official sources:
+  - Generator access page: `https://www.ree.es/es/clientes/generador/acceso-conexion/conoce-la-capacidad-de-acceso`
+  - Generator direct CSV: `https://www.ree.es/sites/default/files/12_CLIENTES/Documentos/2026_03_02_GRT_generacion.csv`
+  - Consumer access page: `https://www.ree.es/es/clientes/consumidor/acceso-conexion/conoce-el-estado-de-las-solicitudes`
+  - Consumer direct XLSX: `https://www.ree.es/sites/default/files/12_CLIENTES/Documentos/publicacion-solicitudes-acceso-demanda-febrero-2026.xlsx`
+- Notes:
+  - These files are official and useful for transmission-context analysis.
+  - They are still not a geocoded transport-grid asset layer, so they should not replace DSO data for nearest-substation spatial joins.
+
 ## Already Present Before This Audit
 
 ### Mandatory datasets already available in the repo
@@ -72,22 +104,14 @@ This note maps the datathon brief to the datasets currently present in `data/raw
   - Local folder: `data/raw/dgt_registrations/`
   - Official source page from the brief: `https://www.dgt.es/menusecundario/dgt-en-cifras/matraba-listados/matriculaciones-automoviles-mensual.html`
 
-## Still Missing Or Not Yet Reliable Enough To Ingest
+## Still Missing Or Still Limited
 
-### 1. REE transmission-level grid context
+### 1. REE spatial transmission geometry
 - Target folder: `data/raw/additional/ree_grid/`
-- Status: still missing as a clean spatial dataset
-- Why it is still missing:
-  - The official REE public files we found are trustworthy, but the ones exposed publicly here are tabular node-capacity files, not a clean geocoded transmission network layer ready for spatial joins.
-  - The REE API endpoint tested during the audit was unstable from this environment.
-- Official source pages:
-  - Consumer access status: `https://www.ree.es/es/clientes/consumidor/acceso-conexion/conoce-el-estado-de-las-solicitudes`
-  - Generator access capacity: `https://www.ree.es/es/clientes/generador/acceso-conexion/conoce-la-capacidad-de-acceso`
-- Direct official files found:
-  - `https://www.ree.es/sites/default/files/12_CLIENTES/Documentos/2026_02_28_GRT_demanda.xlsx`
-  - `https://www.ree.es/sites/default/files/12_CLIENTES/Documentos/2026_03_02_GRT_generacion.csv`
-- Recommendation:
-  - Only ingest REE once you have a spatially joinable layer or a clearly documented method to match REE nodes to coordinates/substations. Otherwise it will add churn without helping the optimization notebooks.
+- Status: still missing as a geocoded layer
+- Why it is still limited:
+  - The REE publications now in the repo are official and usable, but they remain tabular and not spatially geocoded.
+  - They add context and evidence, not a plug-in replacement for geospatial substation layers.
 
 ### 2. AFIR regulation reference
 - Target folder: `data/raw/additional/afir_requirements/`
@@ -99,7 +123,7 @@ This note maps the datathon brief to the datasets currently present in `data/raw
 
 ## Practical Takeaway
 
-If you want the minimum trustworthy dataset set to keep moving in notebooks, the critical missing data need is now mostly reduced to `ree_grid/`.
+If you want the minimum trustworthy dataset set to keep moving in notebooks, no key notebook input folder is empty anymore.
 
 Everything else needed by the current notebook structure is now either:
 - already in the repo, or
