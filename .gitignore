@@ -38,6 +38,7 @@ desktop.ini
 
 # Large data files
 *.parquet
++ !data/raw/datos_gob_ev_forecast/*.parquet
 data/raw/**/*.xlsx
 data/raw/**/*.xls
 data/raw/**/*.pdf

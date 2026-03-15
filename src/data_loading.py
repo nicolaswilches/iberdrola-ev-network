@@ -267,30 +267,41 @@ def load_ev_forecast(filepath=None):
     if filepath is None:
         filepath = DATA_RAW / 'datos_gob_ev_forecast'
 
-    parquet_files = sorted(Path(filepath).glob('*.parquet'))
-    records = []
+    path_obj = Path(filepath)
+    parquet_files = sorted(path_obj.glob('*.parquet'))
 
+    if not parquet_files:
+        print(f"Warning: No .parquet files found in {path_obj.absolute()}")
+        return pd.DataFrame(columns=['year_month', 'ev_registrations', 'date'])
+
+    records = []
     for pf in parquet_files:
         # Extract year_month from filename (e.g., 2023_01.parquet)
         year_month = pf.stem  # e.g., '2023_01'
-        df = pd.read_parquet(pf)
+        try:
+            df = pd.read_parquet(pf)
 
-        # Filter to new registrations only
-        if 'CLAVE_TRAMITE' in df.columns:
-            df = df[df['CLAVE_TRAMITE'] == '1']
+            # Filter to new registrations only
+            if 'CLAVE_TRAMITE' in df.columns:
+                df = df[df['CLAVE_TRAMITE'] == '1']
 
-        # Filter to plug-in EVs (BEV + PHEV)
-        if 'CATEGORÍA_VEHÍCULO_ELÉCTRICO' in df.columns:
-            ev_count = df[df['CATEGORÍA_VEHÍCULO_ELÉCTRICO'].isin(['BEV', 'PHEV'])].shape[0]
-        else:
-            ev_count = 0
+            # Filter to plug-in EVs (BEV + PHEV)
+            if 'CATEGORÍA_VEHÍCULO_ELÉCTRICO' in df.columns:
+                ev_count = df[df['CATEGORÍA_VEHÍCULO_ELÉCTRICO'].isin(['BEV', 'PHEV'])].shape[0]
+            else:
+                ev_count = 0
 
-        records.append({
-            'year_month': year_month,
-            'ev_registrations': ev_count,
-        })
+            records.append({
+                'year_month': year_month,
+                'ev_registrations': ev_count,
+            })
+        except Exception as e:
+            print(f"Error reading {pf}: {e}")
 
     result = pd.DataFrame(records)
+    if result.empty:
+        return pd.DataFrame(columns=['year_month', 'ev_registrations', 'date'])
+
     # Parse year_month to datetime for time series
     result['date'] = pd.to_datetime(result['year_month'], format='%Y_%m')
     result = result.sort_values('date').reset_index(drop=True)
