@@ -1,7 +1,7 @@
 # Project State
 
-**Last updated:** 2026-04-08
-**Status:** NB01–NB06 all executed. 06a–06d fully implemented. NB07 ready to run (tent_tier fix applied). NB07b fully implemented. `src/optimization.py` BallTree index bug fixed — 9 proposed stations, 0 AFIR gaps.
+**Last updated:** 2026-04-09
+**Status:** NB01–NB07 executed. NB08 fixed and ready to run. 06a–06d, 07b fully implemented. NB09–NB10 pending.
 
 ## What is done
 
@@ -30,9 +30,9 @@
 | `06b_abm_calibration.ipynb` | ✅ Implemented | B1 sensitivity, SOC heatmap, seasonal sweep; outputs `abm_calibration_summary.csv` |
 | `06c_abm_demand_simulation.ipynb` | ✅ Implemented | Monte Carlo 2,000 agents/segment; outputs `demand_per_segment_stochastic.csv` |
 | `06d_demand_reconciliation.ipynb` | ✅ Implemented | Three-way comparison, NB06 formally designated authoritative; outputs `demand_reconciliation_report.csv` |
-| `07_network_optimization.ipynb` | ▶️ Ready to run | tent_tier fix applied (cell-4). BallTree bug in optimization.py fixed. Will produce 9 stations covering 9 AFIR gaps, 0 remaining. |
+| `07_network_optimization.ipynb` | ✅ Executed | 9 proposed stations, 32 chargers, 0 remaining AFIR gaps. `proposed_stations.csv` saved. |
 | `07b_abm_validation.ipynb` | ✅ Implemented | 5-step: load → utilization metrics → AFIR re-check → KPI export → viz. Outputs `station_validation_metrics.csv` + figure. |
-| `08_grid_viability_friction.ipynb` | ⏳ Pending | Depends on NB05 + NB07 |
+| `08_grid_viability_friction.ipynb` | ▶️ Ready to run | Fixed: uses `grid_consolidated.csv` (2,137 deduplicated), MW comparison table, explicit unmatched station flagging. |
 | `09_output_generation.ipynb` | ⏳ Pending | Depends on NB08 |
 | `10_visualization_export.ipynb` | ⏳ Pending | Depends on NB09 |
 | `output/File_1.csv`–`File_3.csv` | ❌ Empty | Header-only, populated by NB09 |

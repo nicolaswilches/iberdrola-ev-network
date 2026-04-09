@@ -1,5 +1,22 @@
 # Decisions Log
 
+## 2026-04-09 — NB08 Grid Viability Fixes (data source, units, unmatched stations)
+
+**Decision:** Three fixes applied to NB08 before execution.
+
+### Fix 1 — Grid data source: `grid_capacity_unified.csv` → `grid_consolidated.csv`
+The notebook loaded the 4,990-record unified file (one row per voltage level per substation). Switched to `grid_consolidated.csv` (2,137 deduplicated physical substations, NB05 output). BallTree matching result is functionally identical (duplicates share capacity), but printed stats and DSO breakdowns are now correct per the 2026-04-07 substation count correction decision.
+
+### Fix 2 — Unit mismatch: demand (kW) vs capacity (MW)
+`estimated_demand_kw` (e.g., 600 kW) was displayed alongside `available_capacity_mw` (e.g., 0.06 MW) with no conversion, making the comparison misleading. Added `estimated_demand_mw` as a display-only column and a side-by-side MW table in cell 8. The column is stripped before saving CSVs (File_3 schema requires `estimated_demand_kw`).
+
+### Fix 3 — Unmatched stations flagged explicitly
+2 of 9 stations (STA_0003/N-330 and STA_0009/AP-9) have no substation within the 25 km search radius. Previously silent — now cell 6 prints their IDs, routes, and coordinates, and explains they require new grid infrastructure (not just a connection extension). Classified Congested per worst-case assumption D1. The 25 km radius is kept per assumption D4.
+
+**Impact:** Corrects misleading stats, makes the grid deficit visible at a glance, and documents the 2 remote stations needing greenfield grid investment. No change to downstream schema.
+
+---
+
 ## 2026-04-08 — Road-Following Distance Refactor in optimization.py + NB07
 
 **Decision:** Replaced all birds-eye (haversine) distance calculations in `src/optimization.py` with road-following linear-referencing, making it consistent with NB04's methodology throughout the pipeline.

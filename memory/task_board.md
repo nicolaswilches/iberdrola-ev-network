@@ -1,6 +1,6 @@
 # Task Board
 
-**Last updated:** 2026-04-08 (rev 3)
+**Last updated:** 2026-04-09
 
 ## Done
 
@@ -35,11 +35,11 @@ _(none)_
 - [x] Fix NB07 `tent_tier` derivation — added TENT_red_basica mapping in cell-4; interurban_roads.parquet doesn't have the column
 - [x] Fix `place_stations_greedy` BallTree index bug — secondary 2 km haversine used sorted positions as iloc indices, silently dropped A-23 TEN-T Core gap
 - [x] Implement NB07b — ABM validation (utilization metrics, queue risk, AFIR re-check, KPI export, visualization)
+- [x] Run NB07 — Network Optimization ✅ (9 stations, 32 chargers, 0 AFIR gaps)
+- [x] Fix NB08 — switched to `grid_consolidated.csv` (2,137 deduplicated), added MW comparison table, flagged 2 unmatched stations explicitly
 
 ## Pending — critical path
-
-- [ ] **Run NB07** — Network Optimization (▶️ ready — tent_tier + BallTree fixes applied; will produce 9 stations, 0 AFIR gaps)
-- [ ] Run NB08 — Grid Viability & Friction Points (needs NB05 ✅ + NB07)
+- [ ] **Run NB08** — Grid Viability & Friction Points (▶️ ready — fixes applied, needs re-run)
 - [ ] Run NB09 — Output Generation (needs NB08)
 - [ ] Run NB10 — Visualization Export (needs NB09)
 
