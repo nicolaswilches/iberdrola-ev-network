@@ -2,56 +2,44 @@
 
 ## Active Blockers
 
-_(none — pipeline is unblocked, NB05 onwards ready to execute)_
+_(none)_
+
+## Recently Resolved
+
+### [RESOLVED 2026-04-13] Shared AFIR gap logic was overstating and understating the network in different places
+
+**Issue:** The notebook and shared optimization logic had drifted. One version still reported stale route counts, while the production gap function only kept the longest contiguous component of each road. That meant the repo could simultaneously overstate the baseline narrative and miss real uncovered stretches.
+
+**Fix:** Rewrote shared gap detection to evaluate every contiguous route component, apply the correct threshold per component (`60/100/120 km`), and reuse that same logic in NB04, NB07, and NB07b.
+
+**Result:** Corrected baseline = 8 uncovered stretches across 8 routes. Corrected final network = 8 proposed stations, 26 chargers, 0 remaining AFIR gaps.
 
 ---
 
-## Resolved Blockers
+### [RESOLVED 2026-04-13] Demand sizing was inconsistent with the mandatory submission EV fleet
 
-### [RESOLVED 2026-04-07] NB04 coverage gap detection broken (centroid-distance logic)
+**Issue:** NB06 had been sizing the network with a conservative `2,000,000` EV base while `File_1.csv` reported `2,498,159`.
 
-**Issue:** Original NB04 cell 8 measured distance from each road segment's centroid to the nearest charger, marking the segment as a gap if `dist > max_spacing_km`. This always returned **0 gaps / 1,295 segments** because (a) the road network is split into many short segments (~10–20 km each), so every centroid is within a few km of some charger, and (b) the method asks the wrong question — it tests whether *some* charger is near the centroid, not whether there is a long *inter-charger stretch* along the route.
+**Fix:** Set `EV_FLEET_DEMAND_BASE = EV_FLEET_2027`, updated notebook text, and reran NB06 plus the auxiliary demand notebooks.
 
-**Example of failure:** N-435 has only 2 fast chargers, both clustered in the first 48 km of a 200 km route. The remaining 149 km has zero coverage but the old method passed it because every short segment's centroid was "near" one of those 2 chargers.
-
-**Fix:** Rewrote cell 8 to use linear referencing per route:
-1. Filter chargers to ≥50 kW (only fast chargers count for AFIR coverage)
-2. Group road segments by `Carretera` and merge geometries into one continuous line
-3. Project each fast charger onto the merged line using `shapely.ops.substring`
-4. Walk consecutive positions (including route endpoints km 0 and km L)
-5. Flag any inter-charger gap > AFIR threshold (60 km TEN-T, 120 km other)
-6. Build the gap geometry as a substring of the route line
-
-**Result:** 39 gaps detected across 39 routes (12 TEN-T, 27 non-TEN-T), 1,590 km total uncovered length.
+**Result:** `demand_per_segment.csv` is now aligned to the same fleet figure used in the final submission.
 
 ---
 
-### [RESOLVED 2026-04-07] 23 missing constants in `src/constants.py` after merge
+### [RESOLVED 2026-04-13] Grid consolidation was merging distinct substations with the same name
 
-**Issue:** After merging `origin/main` with `--allow-unrelated-histories`, we kept our local `constants.py` (researched values) but took Theo's `abm_demand.py`, `geo_utils.py`, and `optimization.py`. Theo's modules imported 23 constants that our `constants.py` didn't define (`EV_PENETRATION_RATE`, `BEV_FRACTION`, `SOC_MEAN`, `MIN_CHARGERS_TENT`, `SUBSTATION_DIST_OPTIMAL_KM`, `MEDITERRANEAN_ROADS`, `ATLANTIC_ROADS`, etc.). All downstream notebooks would have failed to import.
+**Issue:** NB05 had been effectively treating `substation_name` as the physical asset key, which merged different substations that happened to share common names.
 
-**Fix:** Restored the 23 constants in `constants.py` using values from `references/assumptions.md`. Verified all 5 src modules now import cleanly.
+**Fix:** Added safe consolidation by distributor + name + rounded coordinates and regenerated `grid_consolidated.csv`.
 
----
-
-### [RESOLVED 2026-04-07] False claim that NB03 is malformed JSON
-
-**Issue:** `memory/blockers.md` (Theo's branch) claimed `notebooks/03_road_network_analysis.ipynb` was malformed JSON and could not be parsed.
-
-**Fix:** Verified the notebook is valid JSON and ran it successfully. Original claim was wrong; removed from blockers.
+**Result:** Physical substation count is 2,147, not 2,137. National grid status counts are now internally consistent.
 
 ---
 
-### [RESOLVED] NotebookEdit insertion order
+### [RESOLVED 2026-04-13] Notebook reruns were blocked by environment-specific execution issues
 
-**Issue:** When using `NotebookEdit` with `edit_mode=insert`, inserting multiple cells after the same cell_id causes them to appear in reverse order.
+**Issue:** Jupyter kernel execution segfaulted in this environment, and Matplotlib `plt.show()` blocked on the macOS GUI backend.
 
-**Fix:** Always insert in sequential order: write cell N+1 → read to find its new ID → insert N+2 after that new ID.
+**Fix:** Re-executed notebook code paths headlessly and reran plotting notebooks with `MPLBACKEND=Agg`.
 
----
-
-### [RESOLVED] constants.py drift from assumptions.md
-
-**Issue:** 8 parameters in `src/constants.py` had incorrect values that diverged from `references/assumptions.md`.
-
-**Fix:** Corrected all 8 values + added 15 new constants. Execute constants fix before any notebook work.
+**Result:** NB04–NB10 and NB06a–NB06d all completed, and the regenerated CSV/HTML outputs are current.

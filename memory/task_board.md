@@ -4,48 +4,27 @@
 
 ## Done
 
-- [x] Analyze competitor ABM/sequential papers and apply methodology to our scenario
-- [x] Merge `origin/main` (Theo's refactor) with `--allow-unrelated-histories`. Kept our `constants.py`, took Theo's everything else.
-- [x] Restore 23 missing constants in `src/constants.py` so all modules import cleanly
-- [x] Create `src/abm_demand.py` — parsimonious ABM behavioral demand module
-- [x] Update `src/optimization.py` — implement `compute_coverage_gaps()` + `place_stations_greedy()`
-- [x] Implement `src/geo_utils.py` stubs — `find_nearest_substation()` + `snap_point_to_road()`
-- [x] Run NB03 — interurban roads filtered, IMD attached, TEN-T tagged
-- [x] Run NB04 — existing chargers baseline (6,065 stations)
-- [x] **Fix NB04 coverage gap detection** — replaced broken centroid-distance logic with linear-referencing approach. 39 gaps now detected (was 0).
-- [x] Draft NB06 — Demand Modeling (ABM notebook content present)
-- [x] Draft NB07 — Network Optimization notebook content present
-- [x] Draft NB08 — Grid Viability & Friction Points notebook content present
-- [x] Draft NB09 — Output Generation notebook content present
-- [x] Draft NB10 — Visualization Export notebook content present
-- [x] Add auxiliary split-track notebooks `06a`–`06d` and `07b`
-- [x] Run NB05 — Grid Capacity Consolidation ✅
-- [x] Run NB06 — Demand Modeling ✅
-- [x] Implement 06a — Deterministic demand baseline (annual average, lower bound)
-- [x] Implement 06b — ABM calibration & sensitivity analysis (B1, SOC, seasonal)
-- [x] Implement 06c — Monte Carlo ABM simulation (2,000 agents/segment, stochastic cross-check)
-- [x] Implement 06d — Demand reconciliation (three-way comparison, NB06 designated authoritative)
-- [x] Create memory/ infrastructure
-- [x] **Refactor `src/optimization.py` to road-following distance** — `compute_coverage_gaps()` now uses per-route linear referencing (matching NB04); `place_stations_greedy()` marks coverage along-route then 2 km haversine for intersections. NB07 cell-6 diagnostic updated. `find_nearest_substation()` documented as intentionally haversine (grid cables ≠ roads).
+- [x] Fix shared AFIR gap logic so every contiguous route component is checked
+- [x] Align NB06 demand sizing to the mandatory `2,498,159` EV submission baseline
+- [x] Replace unsafe substation-name-only consolidation with safe physical-substation grouping
+- [x] Update NB07 to preserve placement traceability (`source_segment_id`, component, placement km, threshold)
+- [x] Update NB07b to validate stations against their source demand segment instead of route-average demand when available
+- [x] Update NB08 so remote sites inherit the nearest valid DSO label while remaining `Congested`
+- [x] Remove NB09’s manual DSO override path and replace it with strict schema validation
+- [x] Repair malformed notebook code strings introduced during JSON edits
+- [x] Re-execute NB04–NB10 plus auxiliary NB06a–NB06d with the corrected logic
+- [x] Regenerate `File_1.csv`, `File_2.csv`, `File_3.csv`, `dso_investment_summary.csv`, and `visualization/bi_map.html`
+- [x] Re-audit the regenerated network: 8 stations, 26 chargers, 0 remaining AFIR gaps
 
-## In Progress
+## Current Result
 
-_(none)_
+- [x] Baseline compliance gap audit: 8 true uncovered stretches
+- [x] Final network optimization: 8 proposed stations, 26 chargers
+- [x] Grid viability pass: 8 / 8 friction points, 2 remote grid sites
+- [x] Submission validation: all CSV schema and cross-count checks pass
 
-- [x] Fix NB07 `tent_tier` derivation — added TENT_red_basica mapping in cell-4; interurban_roads.parquet doesn't have the column
-- [x] Fix `place_stations_greedy` BallTree index bug — secondary 2 km haversine used sorted positions as iloc indices, silently dropped A-23 TEN-T Core gap
-- [x] Implement NB07b — ABM validation (utilization metrics, queue risk, AFIR re-check, KPI export, visualization)
-- [x] Run NB07 — Network Optimization ✅ (9 stations, 32 chargers, 0 AFIR gaps)
-- [x] Fix NB08 — switched to `grid_consolidated.csv` (2,137 deduplicated), added MW comparison table, flagged 2 unmatched stations explicitly
-- [x] Implement NB09 — Output Generation (8-step: compliance validation, DSO overrides for Unknown distributors, exec summary, DSO investment breakdown)
+## Pending Deliverables
 
-## Pending — critical path
-- [x] **Run NB08** — Grid Viability & Friction Points ✅ (9/9 Congested, 2 unmatched flagged)
-- [x] **Run NB09** — Output Generation ✅ (File_1/2/3 generated, all compliance passed)
-- [x] Run NB10 — Visualization Export ✅ (`bi_map.html` 7.6 MB, folium installed)
-
-## Pending — deliverables
-
-- [ ] Write `report/analytical_report.pdf` (3–5 page executive summary)
-- [ ] Create `presentation/pitch.pdf` (max 5-min pitch deck)
-- [ ] Decide whether to keep or remove `notebooks/test.ipynb` exploratory notebook
+- [ ] Write `report/analytical_report.pdf`
+- [ ] Create `presentation/pitch.pdf`
+- [ ] Decide whether to keep or remove `notebooks/test.ipynb`

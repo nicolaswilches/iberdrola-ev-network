@@ -21,6 +21,7 @@ the same way.
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+from shapely.geometry import Point
 from shapely.ops import linemerge, unary_union, substring
 
 from src.constants import (
@@ -112,11 +113,12 @@ def compute_coverage_gaps(
     """
     Identify coverage gaps on interurban routes using road-following linear referencing.
 
-    For each route (Carretera), merges all segments into a continuous line, projects
-    fast chargers (≥50 kW) onto the line using shapely linear referencing (.project()),
-    walks consecutive charger positions, and flags any stretch longer than the AFIR
-    spacing threshold as a coverage gap. Gaps are measured *along the route*, not as
-    birds-eye distances — this is the methodologically correct interpretation of AFIR.
+    For each route (Carretera), merges all segments and evaluates every contiguous
+    geometry component independently. Fast chargers (≥50 kW) are projected onto each
+    component using shapely linear referencing (.project()), consecutive charger
+    positions are walked, and any stretch longer than the AFIR spacing threshold is
+    flagged as a coverage gap. Gaps are measured *along the route*, not as birds-eye
+    distances — this is the methodologically correct interpretation of AFIR.
 
     Parameters
     ----------
@@ -127,19 +129,21 @@ def compute_coverage_gaps(
         NAP charging stations. Must have: 'latitude', 'longitude', 'max_power_kw'.
     spacing_km : float, optional
         Override AFIR threshold for all routes. If None, uses tiered thresholds
-        (60 / 100 / 120 km) per route from is_tent / tent_tier.
+        (60 / 100 / 120 km) per contiguous route component from is_tent / tent_tier.
 
     Returns
     -------
     gpd.GeoDataFrame
         One row per contiguous uncovered stretch with columns:
-        Carretera, gap_start_km, gap_end_km, gap_length_km,
+        Carretera, route_component_id, component_length_km,
+        gap_start_km, gap_end_km, gap_mid_km, gap_length_km,
         gap_mid_lat, gap_mid_lon, is_tent, tent_tier,
         gap_spacing_threshold_km, n_chargers_on_route,
         segment_id (representative nearest segment), geometry (EPSG:4326).
     """
     _EMPTY_COLS = [
-        'Carretera', 'gap_start_km', 'gap_end_km', 'gap_length_km',
+        'Carretera', 'route_component_id', 'component_length_km',
+        'gap_start_km', 'gap_end_km', 'gap_mid_km', 'gap_length_km',
         'gap_mid_lat', 'gap_mid_lon', 'is_tent', 'tent_tier',
         'gap_spacing_threshold_km', 'n_chargers_on_route', 'segment_id', 'geometry',
     ]
@@ -168,72 +172,127 @@ def compute_coverage_gaps(
     gap_records = []
 
     for carretera, road_group in roads_utm.groupby('Carretera'):
-        # Merge all segments of this route into one continuous line
+        # Merge all segments of this route, then evaluate each contiguous piece.
         try:
             merged = linemerge(unary_union(road_group.geometry.values))
         except Exception:
             merged = unary_union(road_group.geometry.values)
 
-        # If the route is discontinuous, take the longest contiguous piece
         if merged.geom_type == 'MultiLineString':
-            merged = max(merged.geoms, key=lambda g: g.length)
+            components = sorted(
+                list(merged.geoms),
+                key=lambda g: (-g.length, round(g.centroid.x, 3), round(g.centroid.y, 3)),
+            )
+        else:
+            components = [merged]
 
-        route_length_km = merged.length / 1000
-        if route_length_km < 5:
-            continue  # skip very short routes
+        for component_idx, component_geom in enumerate(components, start=1):
+            component_length_km = component_geom.length / 1000
+            if component_length_km < 5:
+                continue  # skip very short components
 
-        # Determine AFIR tier for this route
-        is_tent = bool(road_group['is_tent'].any())
-        if 'tent_tier' in road_group.columns:
-            tier_vals = road_group['tent_tier'].fillna('none').astype(str).str.lower()
-            if (tier_vals == 'core').any():
-                tent_tier = 'core'
-            elif (tier_vals == 'comprehensive').any():
-                tent_tier = 'comprehensive'
-            elif is_tent:
-                tent_tier = 'core'  # default TEN-T to core when tier unknown
+            # Use only segments that belong to this contiguous component so we do
+            # not apply one component's TEN-T tier or coverage state to another.
+            component_segments = road_group[
+                road_group.geometry.intersects(component_geom.buffer(1.0))
+            ]
+            if len(component_segments) == 0:
+                component_segments = road_group
+
+            is_tent = bool(component_segments['is_tent'].any())
+            if 'tent_tier' in component_segments.columns:
+                tier_vals = component_segments['tent_tier'].fillna('none').astype(str).str.lower()
+                if (tier_vals == 'core').any():
+                    tent_tier = 'core'
+                elif (tier_vals == 'comprehensive').any():
+                    tent_tier = 'comprehensive'
+                elif is_tent:
+                    tent_tier = 'core'
+                else:
+                    tent_tier = 'none'
             else:
-                tent_tier = 'none'
-        else:
-            tent_tier = 'core' if is_tent else 'none'
+                tent_tier = 'core' if is_tent else 'none'
 
-        if spacing_km is not None:
-            threshold_km = spacing_km
-        elif tent_tier == 'core':
-            threshold_km = MAX_STATION_SPACING_TENT_CORE_KM
-        elif tent_tier == 'comprehensive':
-            threshold_km = MAX_STATION_SPACING_TENT_COMP_KM
-        else:
-            threshold_km = MAX_STATION_SPACING_KM
-        threshold_m = threshold_km * 1000
+            component_segments = component_segments.copy()
+            component_segments['_spacing_threshold_km'] = component_segments.apply(
+                _get_spacing_threshold, axis=1
+            )
+            component_segments['_seg_start_m'] = component_segments.geometry.apply(
+                lambda seg: min(
+                    component_geom.project(Point(seg.coords[0])),
+                    component_geom.project(Point(seg.coords[-1])),
+                )
+            )
+            component_segments['_seg_end_m'] = component_segments.geometry.apply(
+                lambda seg: max(
+                    component_geom.project(Point(seg.coords[0])),
+                    component_geom.project(Point(seg.coords[-1])),
+                )
+            )
 
-        # Find fast chargers within 2 km of this route
-        if len(fast_gdf) > 0:
-            route_buffer = merged.buffer(2000)
-            nearby = fast_gdf[fast_gdf.geometry.within(route_buffer)].copy()
-        else:
-            nearby = fast_gdf.iloc[:0].copy()
+            if spacing_km is not None:
+                threshold_km = spacing_km
+            elif tent_tier == 'core':
+                threshold_km = MAX_STATION_SPACING_TENT_CORE_KM
+            elif tent_tier == 'comprehensive':
+                threshold_km = MAX_STATION_SPACING_TENT_COMP_KM
+            else:
+                threshold_km = MAX_STATION_SPACING_KM
+            threshold_m = threshold_km * 1000
 
-        if len(nearby) == 0:
-            positions = [0.0, merged.length]
-        else:
-            # Project each charger onto the route line (linear referencing)
-            nearby = nearby.copy()
-            nearby['along_m'] = nearby.geometry.apply(lambda p: merged.project(p))
-            nearby = nearby.sort_values('along_m').reset_index(drop=True)
-            positions = [0.0] + nearby['along_m'].tolist() + [merged.length]
+            if len(fast_gdf) > 0:
+                route_buffer = component_geom.buffer(2000)
+                nearby = fast_gdf[fast_gdf.geometry.within(route_buffer)].copy()
+            else:
+                nearby = fast_gdf.iloc[:0].copy()
 
-        n_chargers = len(nearby)
+            if len(nearby) == 0:
+                positions = [0.0, component_geom.length]
+            else:
+                nearby = nearby.copy()
+                nearby['along_m'] = nearby.geometry.apply(lambda p: component_geom.project(p))
+                nearby = nearby.sort_values('along_m').reset_index(drop=True)
+                positions = [0.0] + nearby['along_m'].tolist() + [component_geom.length]
 
-        for i in range(len(positions) - 1):
-            gap_m = positions[i + 1] - positions[i]
-            if gap_m > threshold_m:
+            n_chargers = len(nearby)
+            route_component_id = f'{carretera}__component_{component_idx:02d}'
+
+            for i in range(len(positions) - 1):
+                interval_segments = component_segments[
+                    (component_segments['_seg_end_m'] > positions[i])
+                    & (component_segments['_seg_start_m'] < positions[i + 1])
+                ]
+                if len(interval_segments) > 0:
+                    interval_tiers = interval_segments['tent_tier'].fillna('none').astype(str).str.lower()
+                    gap_is_tent = bool(interval_segments['is_tent'].any())
+                    if spacing_km is not None:
+                        interval_threshold_km = spacing_km
+                        gap_tent_tier = tent_tier
+                    elif (interval_tiers == 'core').any():
+                        interval_threshold_km = MAX_STATION_SPACING_TENT_CORE_KM
+                        gap_tent_tier = 'core'
+                    elif (interval_tiers == 'comprehensive').any():
+                        interval_threshold_km = MAX_STATION_SPACING_TENT_COMP_KM
+                        gap_tent_tier = 'comprehensive'
+                    else:
+                        interval_threshold_km = MAX_STATION_SPACING_KM
+                        gap_tent_tier = 'none'
+                else:
+                    interval_threshold_km = threshold_km
+                    gap_is_tent = is_tent
+                    gap_tent_tier = tent_tier
+
+                gap_m = positions[i + 1] - positions[i]
+                if gap_m <= interval_threshold_km * 1000:
+                    continue
+
                 try:
-                    gap_geom = substring(merged, positions[i], positions[i + 1])
+                    gap_geom = substring(component_geom, positions[i], positions[i + 1])
                 except Exception:
                     gap_geom = None
 
-                # Midpoint at 50% along the gap geometry (road-following midpoint)
+                gap_mid_km = round(((positions[i] + positions[i + 1]) / 2) / 1000, 2)
+
                 if gap_geom is not None and not gap_geom.is_empty:
                     mid_pt_utm = gap_geom.interpolate(0.5, normalized=True)
                     mid_wgs = gpd.GeoDataFrame(
@@ -247,14 +306,17 @@ def compute_coverage_gaps(
 
                 gap_records.append({
                     'Carretera': carretera,
+                    'route_component_id': route_component_id,
+                    'component_length_km': round(component_length_km, 2),
                     'gap_start_km': round(positions[i] / 1000, 2),
                     'gap_end_km': round(positions[i + 1] / 1000, 2),
+                    'gap_mid_km': gap_mid_km,
                     'gap_length_km': round(gap_m / 1000, 2),
                     'gap_mid_lat': gap_mid_lat,
                     'gap_mid_lon': gap_mid_lon,
-                    'is_tent': is_tent,
-                    'tent_tier': tent_tier,
-                    'gap_spacing_threshold_km': threshold_km,
+                    'is_tent': gap_is_tent,
+                    'tent_tier': gap_tent_tier,
+                    'gap_spacing_threshold_km': interval_threshold_km,
                     'n_chargers_on_route': n_chargers,
                     'segment_id': None,  # filled below
                     'geometry': gap_geom,
@@ -304,8 +366,8 @@ def place_stations_greedy(
          (or nearest service area if available — preferred for land/utilities).
       2. Score each candidate: V_i = n_chargers_needed × gap_length_km
          (maximises demand served per station placed).
-      3. Select highest-score candidate, mark all segments within its spacing
-         threshold as covered, update residual gaps.
+      3. Select highest-score candidate, mark all same-component gaps within its
+         spacing threshold as covered, update residual gaps.
       4. Repeat until no gaps remain.
 
     Parameters
@@ -325,8 +387,9 @@ def place_stations_greedy(
     Returns
     -------
     pd.DataFrame
-        Proposed stations with columns:
+        Proposed stations. Core submission columns are:
         location_id, latitude, longitude, route_segment, n_chargers_proposed
+        Extra traceability columns are also retained for downstream validation.
     """
     from sklearn.neighbors import BallTree
 
@@ -375,8 +438,12 @@ def place_stations_greedy(
     if service_areas_gdf is not None and len(service_areas_gdf) > 0:
         sa_pts = service_areas_gdf.copy()
         if hasattr(sa_pts, 'geometry'):
-            sa_pts['_sa_lat'] = sa_pts.geometry.centroid.y
-            sa_pts['_sa_lon'] = sa_pts.geometry.centroid.x
+            try:
+                sa_centroids = sa_pts.to_crs('EPSG:25830').geometry.centroid.to_crs('EPSG:4326')
+            except Exception:
+                sa_centroids = sa_pts.geometry.centroid
+            sa_pts['_sa_lat'] = sa_centroids.y
+            sa_pts['_sa_lon'] = sa_centroids.x
         sa_pts = sa_pts[sa_pts['_sa_lat'].notna()].reset_index(drop=True)
         if len(sa_pts) > 0:
             sa_coords_deg = sa_pts[['_sa_lat', '_sa_lon']].values
@@ -432,6 +499,15 @@ def place_stations_greedy(
                 cand_lat, cand_lon = sa_row[0], sa_row[1]
 
         road_name = str(best_row.get('Carretera', best_row.get('route_segment', 'Unknown')))
+        station_pos_km = float(
+            best_row.get(
+                'gap_mid_km',
+                (
+                    float(best_row.get('gap_start_km', 0))
+                    + float(best_row.get('gap_end_km', 0))
+                ) / 2,
+            )
+        )
 
         stations.append({
             'location_id': f'STA_{loc_counter:04d}',
@@ -439,19 +515,25 @@ def place_stations_greedy(
             'longitude': round(cand_lon, 6),
             'route_segment': road_name,
             'n_chargers_proposed': best_n_chargers,
+            'source_segment_id': best_row.get('segment_id'),
+            'route_component_id': best_row.get('route_component_id'),
+            'placement_km': round(station_pos_km, 2),
+            'gap_spacing_threshold_km': spacing_thresh,
+            'source_gap_length_km': float(best_row.get('gap_length_km', np.nan)),
+            'tent_tier': best_row.get('tent_tier'),
+            'is_tent': bool(best_row.get('is_tent', False)),
         })
         loc_counter += 1
 
         # --- Road-following coverage marking ---
-        # Primary: along-route distance for gaps on the same Carretera.
+        # Primary: along-route distance for gaps on the same contiguous component.
         # A station at position P covers all gap stretches [start, end] on
-        # the same road where any part of the gap is within spacing_thresh km.
+        # the same road/component where any part of the gap is within
+        # spacing_thresh km.
         if 'gap_start_km' in gaps.columns and 'gap_end_km' in gaps.columns:
-            station_pos_km = (
-                float(best_row.get('gap_start_km', 0))
-                + float(best_row.get('gap_end_km', 0))
-            ) / 2
             same_route = gaps['Carretera'] == road_name
+            if 'route_component_id' in gaps.columns and pd.notna(best_row.get('route_component_id')):
+                same_route &= gaps['route_component_id'] == best_row.get('route_component_id')
             within_reach = (
                 same_route
                 & (gaps['gap_start_km'] < station_pos_km + spacing_thresh)

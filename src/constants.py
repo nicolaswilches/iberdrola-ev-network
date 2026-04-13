@@ -8,10 +8,12 @@ POWER_PER_CHARGER_KW = 150          # Fixed at 150 kW per charger for all teams 
 EV_FLEET_2027 = 2_498_159           # MANDATORY: SARIMA output for File_1 (E1)
 
 # === EV FLEET SCALING ===
-EV_FLEET_DEMAND_BASE = 2_000_000    # Conservative base for demand sizing (E1 note)
+# Keep a separate alias so notebooks/modules do not need to change imports.
+# The main pipeline now sizes demand to the same fleet reported in File_1.
+EV_FLEET_DEMAND_BASE = EV_FLEET_2027
 BEV_FRACTION = 0.60                 # 60% of EV fleet are BEVs; PHEVs don't need highway fast charging (A4)
 TOTAL_VEHICLE_FLEET = 35_000_000    # Spain light vehicle fleet 2027 estimate (E3)
-EV_PENETRATION_RATE = EV_FLEET_DEMAND_BASE / TOTAL_VEHICLE_FLEET  # ~0.0571 (E3)
+EV_PENETRATION_RATE = EV_FLEET_DEMAND_BASE / TOTAL_VEHICLE_FLEET  # Mainline 2027 demand penetration rate (E3)
 
 # === EV AUTONOMY ===
 AVG_EV_RANGE_KM = 340               # WLTP average range, IEA GEVO 2025 (A1)

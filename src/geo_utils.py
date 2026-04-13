@@ -30,7 +30,7 @@ def find_nearest_substation(
     station_lat: float,
     station_lon: float,
     substations_df: pd.DataFrame,
-    max_radius_km: float = MAX_SUBSTATION_SEARCH_RADIUS_KM,
+    max_radius_km: float | None = MAX_SUBSTATION_SEARCH_RADIUS_KM,
 ) -> dict:
     """
     Find nearest electricity substation to a proposed charging station.
@@ -57,15 +57,16 @@ def find_nearest_substation(
         Grid capacity data. Must have: 'latitude', 'longitude',
         'available_capacity_mw', 'distributor_network'.
         Optional: 'substation_id' or 'substation_name'.
-    max_radius_km : float
+    max_radius_km : float or None
         Maximum matching radius. Default 25 km (D4).
+        Pass None to return the nearest substation regardless of distance.
 
     Returns
     -------
     dict or None
         Keys: substation_id, distance_km, available_capacity_mw,
               distributor_network, connection_tier.
-        Returns None if no substation found within max_radius_km.
+        Returns None if no substation is found within max_radius_km.
     """
     from sklearn.neighbors import BallTree
 
@@ -80,7 +81,7 @@ def find_nearest_substation(
     dist_rad, idx = tree.query(query, k=1)
     dist_km = float(dist_rad[0][0]) * 6371
 
-    if dist_km > max_radius_km:
+    if max_radius_km is not None and dist_km > max_radius_km:
         return None
 
     row = df.iloc[int(idx[0][0])]

@@ -247,11 +247,11 @@ Previous placeholder values are superseded by the entries below.
 - **Justification:** Less than 1 MW cannot reliably power even a single 150 kW charger
   after accounting for load diversity factor and power factor correction. Full grid
   reinforcement is required before any station deployment at such locations.
-  Critical finding from repo data analysis: 80.6% of the 2,137 unique physical
-  substations in `grid_consolidated.csv` show 0 MW available capacity, and 85.9% are
+  Critical finding from repo data analysis: 81.9% of the 2,147 unique physical
+  substations in `grid_consolidated.csv` are Congested, and 85.9% are
   Congested or Moderate (friction points) in total. The raw `grid_capacity_unified.csv`
-  contains 4,990 records (one per voltage tap) which collapse to 2,137 substations after
-  deduplication by name + coordinates — always cite the 2,137 figure for physical
+  contains 4,990 records (one per voltage tap) which collapse to 2,147 substations after
+  safe deduplication by distributor + name + coordinates — always cite the 2,147 figure for physical
   infrastructure claims. This is not a data error: it reflects the authentic current
   saturation of Spain's distribution network and is the central strategic insight of
   the project. By distributor: i-DE = 88% Congested; Endesa = 78% Congested;
@@ -297,15 +297,17 @@ Previous placeholder values are superseded by the entries below.
 - **Value used:**
   - **Datathon output (File_1):** 2,498,159 — direct output of datos.gob.es SARIMA fork
     (mandatory per datathon brief §4.1 Rule 3). This value cannot be modified.
-  - **Demand model base case:** 2,000,000 (conservative, used in NB 06 charger sizing)
+  - **Demand model base case:** 2,498,159 (aligned to File_1 and used in NB06 charger sizing)
 - **Previous value:** [OUTPUT FROM DATOS.GOB.ES FORK] — placeholder
 - **Justification:** The SARIMA model projects ~2.5M cumulative EVs by December 2027.
   Cross-validation against IEA projections for Spain (Stated Policies scenario), ANFAC
   recent data (+64.5% electrified vehicle sales in February 2026), and the current fleet
   base (~480K at end-2023) suggests 2.5M requires sustained ~50% annual fleet growth —
   ambitious but plausible given MOVES III incentives and accelerating EU CO2 regulations.
-  The demand model uses 2.0M as a conservative base case to avoid oversizing stations;
-  sensitivity analysis at 2.5M and 1.5M is recommended in the report.
+  The demand model is aligned to the same 2,498,159 mandatory baseline so the optimization,
+  validation, and submission outputs all describe the same market size. Sensitivity analysis
+  at lower and higher adoption levels can still be discussed separately in the report, but it
+  should not replace the mandatory sizing baseline in the delivered files.
 - **Impact on model:** total_ev_projected_2027 in File_1 = 2,498,159 (mandatory).
   Demand model uses 2.0M to calculate EV penetration rate (E3).
 - **Sources:** datos.gob.es SARIMA fork (ev_projection_2027.csv in repo); IEA GEVO 2025

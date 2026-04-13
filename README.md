@@ -147,8 +147,8 @@ jupyter notebook notebooks/00_environment_setup.ipynb
 See [references/assumptions.md](references/assumptions.md) for full documentation.
 
 - 150 kW per charger (mandated by datathon rules)
-- Max station spacing: 150 km
-- Average EV range: 300 km WLTP (240 km effective)
+- Max station spacing: 60 km TEN-T Core, 100 km TEN-T Comprehensive, 120 km general interurban
+- Average EV range: 340 km WLTP (255 km effective highway range)
 - Grid status thresholds: ≥5 MW = Sufficient, 1-5 MW = Moderate, <1 MW = Congested
 
 ---

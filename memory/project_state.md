@@ -1,61 +1,51 @@
 # Project State
 
 **Last updated:** 2026-04-13
-**Status:** Full pipeline executed (NB01–NB10). All three submission files generated. `bi_map.html` exported. Report and pitch deck pending.
+**Status:** Full pipeline executed (NB01–NB10) with corrected gap logic, aligned demand sizing, safe grid consolidation, regenerated submission files, and exported visualization. Report and pitch deck remain pending.
 
 ## What is done
 
 | Component | Status | Notes |
 |---|---|---|
-| Merge with `origin/main` (Theo's refactor) | ✅ Done | `--allow-unrelated-histories`. Kept our `constants.py`, took Theo's everything else. |
-| `src/constants.py` | ✅ Done | All 39 constants present (16 inherited + 23 restored from our researched values, including ABM/AFIR/substation tiers). All `src/` modules import cleanly. |
-| `src/data_loading.py` | ✅ Done | Theo's refactored version |
-| `src/grid_analysis.py` | ✅ Done | — |
-| `src/geo_utils.py` | ✅ Done | `find_nearest_substation()` + `snap_point_to_road()` implemented |
-| `src/abm_demand.py` | ✅ Done | Parsimonious ABM behavioral demand module |
-| `src/optimization.py` | ✅ Done | **Bug fix 2026-04-08**: `place_stations_greedy()` secondary 2 km haversine block was using sorted BallTree distance positions as DataFrame iloc indices (discarding the actual index array). Fixed to use `bt_idxs`. Previously silently dropped A-23 gap on every run. Road-following refactor still intact. |
-| `00_environment_setup.ipynb` | ✅ Executed | — |
-| `01_data_ingestion_and_cleaning.ipynb` | ✅ Executed | All processed datasets generated |
-| `02_ev_projection_fork.ipynb` | ✅ Executed | SARIMA → 2,498,159 EVs by 2027 |
-| `03_road_network_analysis.ipynb` | ✅ Executed | (not actually malformed JSON — that claim was wrong). Generates `interurban_roads.parquet`, `road_segments_with_imd.csv` |
-| `04_existing_chargers_baseline.ipynb` | ✅ Executed | **Gap detection rewritten** — see decisions log. 39 AFIR gaps found across 39 routes (was 0 with old centroid logic) |
+| `src/constants.py` | ✅ Done | Demand sizing now uses the same `2,498,159` EV baseline reported in `File_1.csv` |
+| `src/geo_utils.py` | ✅ Done | `find_nearest_substation()` supports uncapped nearest lookup for remote-site DSO attribution |
+| `src/grid_analysis.py` | ✅ Done | Added safe `consolidate_substations()` using distributor + name + coordinates |
+| `src/optimization.py` | ✅ Done | Coverage gaps are now evaluated across every contiguous route component; service-area centroids projected correctly before BallTree siting |
+| `04_existing_chargers_baseline.ipynb` | ✅ Executed | Corrected AFIR baseline: 8 uncovered stretches across 8 routes |
+| `05_grid_capacity_consolidation.ipynb` | ✅ Executed | `grid_consolidated.csv` regenerated with 2,147 physical substations |
+| `06_demand_modeling.ipynb` | ✅ Executed | `demand_per_segment.csv` regenerated (1,295 rows, total charger demand = 4,053) |
+| `06a`–`06d` demand notebooks | ✅ Executed | Deterministic / calibration / stochastic / reconciliation notebooks rerun and aligned with the mandatory EV baseline |
+| `07_network_optimization.ipynb` | ✅ Executed | `proposed_stations.csv` regenerated: 8 stations, 26 chargers, 0 remaining AFIR gaps |
+| `07b_abm_validation.ipynb` | ✅ Executed | `station_validation_metrics.csv` regenerated: 0 overloaded stations, 1 high-queue-risk station, 0 post-placement gaps |
+| `08_grid_viability_friction.ipynb` | ✅ Executed | `stations_with_grid_status.csv` and `friction_points.csv` regenerated: 8/8 stations are grid-constrained |
+| `09_output_generation.ipynb` | ✅ Executed | `File_1.csv`, `File_2.csv`, `File_3.csv`, and `dso_investment_summary.csv` regenerated; all compliance checks passed with no manual DSO overrides |
+| `10_visualization_export.ipynb` | ✅ Executed | `visualization/bi_map.html` regenerated successfully |
 
-## In progress / pending
-
-| Component | Status | Notes |
-|---|---|---|
-| `05_grid_capacity_consolidation.ipynb` | ✅ Executed | `grid_consolidated.csv` — 2,137 substations |
-| `06_demand_modeling.ipynb` | ✅ Executed | `demand_per_segment.csv` — 1,295 rows, chargers [2,12] |
-| `06a_demand_deterministic.ipynb` | ✅ Implemented | Lower-bound annual-avg model; outputs `demand_per_segment_deterministic.csv` |
-| `06b_abm_calibration.ipynb` | ✅ Implemented | B1 sensitivity, SOC heatmap, seasonal sweep; outputs `abm_calibration_summary.csv` |
-| `06c_abm_demand_simulation.ipynb` | ✅ Implemented | Monte Carlo 2,000 agents/segment; outputs `demand_per_segment_stochastic.csv` |
-| `06d_demand_reconciliation.ipynb` | ✅ Implemented | Three-way comparison, NB06 formally designated authoritative; outputs `demand_reconciliation_report.csv` |
-| `07_network_optimization.ipynb` | ✅ Executed | 9 proposed stations, 32 chargers, 0 remaining AFIR gaps. `proposed_stations.csv` saved. |
-| `07b_abm_validation.ipynb` | ✅ Implemented | 5-step: load → utilization metrics → AFIR re-check → KPI export → viz. Outputs `station_validation_metrics.csv` + figure. |
-| `08_grid_viability_friction.ipynb` | ✅ Executed | 9 stations all Congested, 2 unmatched (STA_0003, STA_0009). `stations_with_grid_status.csv` + `friction_points.csv` saved. |
-| `09_output_generation.ipynb` | ✅ Executed | File_1/2/3 generated, all compliance checks passed, DSO overrides applied, exec summary + DSO investment breakdown. |
-| `10_visualization_export.ipynb` | ✅ Executed | `bi_map.html` (7.6 MB) — Folium map with proposed/friction/existing layers + legend. |
-| `output/File_1.csv`–`File_3.csv` | ✅ Generated | 9 stations, 32 chargers, 9 friction points, EV=2,498,159 |
-| `visualization/bi_map.html` | ✅ Generated | Self-contained interactive map, works offline |
-| `report/analytical_report.pdf` | ❌ Not started | 3–5 page executive summary |
-| `presentation/pitch.pdf` | ❌ Not started | Max 5-min pitch |
-
-## Current pipeline metrics (post NB04)
+## Current pipeline metrics
 
 - Interurban road segments: 1,295
-- Existing baseline stations (NAP, all powers): 6,065
+- Existing interurban stations (all powers): 6,065
 - Fast chargers ≥50 kW: 3,246
-- AFIR coverage gaps detected: **39** stretches across 39 routes
-  - TEN-T gaps (>60 km): 12
-  - Non-TEN-T gaps (>120 km): 27
-  - Total uncovered length: ~1,590 km
-  - Worst gap: N-435 with 149.3 km (only 2 chargers on the entire route)
+- Baseline AFIR gaps: 8 stretches across 8 routes
+- Gap mix: 3 TEN-T Core, 2 TEN-T Comprehensive, 3 general interurban
+- Longest baseline gap: `N-435`, 149.27 km
+- Proposed stations: 8
+- Total proposed chargers: 26
+- Remaining AFIR gaps after placement: 0
+- Grid substations after safe consolidation: 2,147
+- Grid status split: 1,759 Congested, 85 Moderate, 303 Sufficient
+- Friction points: 8 / 8 proposed stations
+- Remote grid sites beyond 25 km: `N-502` (29.6 km, Endesa) and `AP-9` (98.4 km, Viesgo)
 
-## Key output files (after running pipeline)
+## Submission outputs
 
-- `data/processed/demand_per_segment.csv` — ABM demand output (NB06)
-- `data/processed/proposed_stations.csv` — Sequential greedy placement (NB07)
-- `data/processed/stations_with_grid_status.csv` — Grid classification (NB08)
-- `data/processed/friction_points.csv` — Moderate + Congested only (NB08)
-- `output/File_1.csv`, `File_2.csv`, `File_3.csv` — Submission deliverables (NB09)
-- `visualization/bi_map.html` — Interactive Folium map (NB10)
+- `output/File_1.csv` — 1 row; `total_proposed_stations = 8`, `total_existing_stations_baseline = 6065`, `total_friction_points = 8`, `total_ev_projected_2027 = 2498159`
+- `output/File_2.csv` — 8 proposed stations across `A-23`, `AP-2`, `AP-9`, `N-322`, `N-433`, `N-435`, `N-502`, `N-621`
+- `output/File_3.csv` — 8 friction points; all `Congested`; valid DSOs only
+- `output/dso_investment_summary.csv` — Endesa 2.4 MW, Viesgo 0.9 MW, i-DE 0.6 MW
+- `visualization/bi_map.html` — self-contained Folium map with proposed stations, friction points, and baseline chargers
+
+## Remaining deliverables
+
+- `report/analytical_report.pdf`
+- `presentation/pitch.pdf`
