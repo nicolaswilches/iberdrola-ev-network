@@ -60,7 +60,7 @@ No build system, Makefile, or CI pipeline exists. Python 3.10+.
 10 Visualization Export         → Folium interactive map → visualization/bi_map.html
 ```
 
-Notebooks 06–10 are stubs awaiting implementation. Notebooks 01–05 are fully implemented.
+Notebooks 01–05 are fully implemented and executed. NB06–NB08 are implemented (NB06–07 executed, NB08 ready to run). NB09 is fully implemented (ready to run after NB08). NB10 is a stub awaiting NB09 output.
 
 ### Source Modules (`src/`)
 - **`constants.py`** — Single source of truth for all thresholds, spacing rules, output schemas

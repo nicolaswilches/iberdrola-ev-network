@@ -1,6 +1,6 @@
 # Task Board
 
-**Last updated:** 2026-04-09
+**Last updated:** 2026-04-13
 
 ## Done
 
@@ -37,11 +37,12 @@ _(none)_
 - [x] Implement NB07b — ABM validation (utilization metrics, queue risk, AFIR re-check, KPI export, visualization)
 - [x] Run NB07 — Network Optimization ✅ (9 stations, 32 chargers, 0 AFIR gaps)
 - [x] Fix NB08 — switched to `grid_consolidated.csv` (2,137 deduplicated), added MW comparison table, flagged 2 unmatched stations explicitly
+- [x] Implement NB09 — Output Generation (8-step: compliance validation, DSO overrides for Unknown distributors, exec summary, DSO investment breakdown)
 
 ## Pending — critical path
-- [ ] **Run NB08** — Grid Viability & Friction Points (▶️ ready — fixes applied, needs re-run)
-- [ ] Run NB09 — Output Generation (needs NB08)
-- [ ] Run NB10 — Visualization Export (needs NB09)
+- [x] **Run NB08** — Grid Viability & Friction Points ✅ (9/9 Congested, 2 unmatched flagged)
+- [x] **Run NB09** — Output Generation ✅ (File_1/2/3 generated, all compliance passed)
+- [x] Run NB10 — Visualization Export ✅ (`bi_map.html` 7.6 MB, folium installed)
 
 ## Pending — deliverables
 

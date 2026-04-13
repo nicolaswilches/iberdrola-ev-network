@@ -1,1 +1,10 @@
 bottleneck_id,latitude,longitude,route_segment,distributor_network,estimated_demand_kw,grid_status
+STA_0001,38.775545,-2.446657,N-322,i-DE,600,Congested
+STA_0002,37.900207,-6.644477,N-433,Endesa,600,Congested
+STA_0003,39.9356,-1.297858,N-330,i-DE,600,Congested
+STA_0004,41.512416,-0.068422,AP-2,Endesa,600,Congested
+STA_0005,41.495475,-0.183176,N-2,Endesa,600,Congested
+STA_0006,40.455491,-1.232499,A-23,Endesa,600,Congested
+STA_0007,37.82396,-6.716242,N-435,Endesa,300,Congested
+STA_0008,43.069502,-4.755363,N-621,Viesgo,300,Congested
+STA_0009,42.681726,-8.634557,AP-9,Viesgo,600,Congested

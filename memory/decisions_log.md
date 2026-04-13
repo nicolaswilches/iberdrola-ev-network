@@ -1,5 +1,25 @@
 # Decisions Log
 
+## 2026-04-13 — NB09 Output Generation: Competition-Ready Implementation
+
+**Decision:** Rewrote NB09 from a basic stub to a competition-ready 8-step notebook with full compliance validation, DSO override logic, executive summary, and investment breakdown.
+
+### Key design choices:
+
+1. **DSO overrides for unmatched stations** — STA_0003 and STA_0009 had `distributor_network = 'Unknown'` (no substation within 25 km). The brief schema requires a valid DSO from {i-DE, Endesa, Viesgo}. Assigned based on provincial DSO concession maps: STA_0003 (N-330, Cuenca) → i-DE; STA_0009 (AP-9, Pontevedra) → Viesgo. Documented in markdown cell with rationale.
+
+2. **Column order validation** — Checks exact column *order* (not just set membership) to prevent CSV column shuffling that could break automated grading.
+
+3. **Round-trip verification** — After saving, reads CSVs back and asserts column names + row counts match, catching encoding/serialization issues.
+
+4. **Executive summary** — Step 7 computes derived KPIs (total MW, chargers per 1,000 EVs, grid capacity gap, utilization metrics from NB07b) as a ready-made reference for the analytical report and pitch.
+
+5. **DSO investment summary** — Step 8 produces per-distributor breakdown with Iberdrola (i-DE) investment opportunity highlighted. Saved as `output/dso_investment_summary.csv`.
+
+**Impact:** NB09 is now ready to execute after NB08. Produces File_1/2/3 plus supplementary analytics for report/pitch. All 8 compliance checks from the brief are enforced programmatically.
+
+---
+
 ## 2026-04-09 — NB08 Grid Viability Fixes (data source, units, unmatched stations)
 
 **Decision:** Three fixes applied to NB08 before execution.
