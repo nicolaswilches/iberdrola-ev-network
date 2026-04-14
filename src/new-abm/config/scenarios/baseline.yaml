@@ -1,0 +1,4 @@
+# Baseline scenario: no modifications
+name: baseline
+description: "Unmodified network and fleet. Used as comparison reference."
+modifications: {}

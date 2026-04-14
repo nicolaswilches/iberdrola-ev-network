@@ -1,0 +1,7 @@
+# Scenario: 40% price reduction at stations on the Madrid-Barcelona corridor
+name: price_reduction
+description: "Reduce charging price by 40% on the Madrid-Barcelona corridor."
+modifications:
+  station_price_multiplier:
+    corridor_stations: ["STA_MAD_N", "STA_ZAR_E", "STA_ZAR_W", "STA_BCN_S"]
+    multiplier: 0.60

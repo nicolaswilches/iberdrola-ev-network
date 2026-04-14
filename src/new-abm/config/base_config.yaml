@@ -1,0 +1,51 @@
+# Base simulation configuration
+# All time units: minutes. All energy: kWh. All distance: km. All money: EUR.
+
+simulation:
+  sim_duration_min: 1440        # 24-hour simulation window
+  random_seed: 42
+  num_agents: 200               # Number of trip agents to simulate
+  log_level: INFO
+
+energy_model:
+  default_consumption_kwh_per_km: 0.20   # Base BEV highway consumption
+  high_speed_penalty: 0.0               # Speed penalty disabled for cleaner demo
+  slope_factor_kwh_per_grade_per_km: 0.04 # kWh penalty per % grade per km (uphill)
+  taper_soc_threshold: 0.80              # Charging power tapers above this SOC fraction
+  taper_min_power_fraction: 0.10         # Minimum power fraction at 100% SOC
+
+behavior:
+  min_reserve_soc_fraction: 0.10         # Never let SOC drop below this
+  emergency_soc_fraction: 0.15           # Trigger emergency charge search below this
+  target_soc_on_arrival: 0.20            # Desired SOC at destination
+  min_charge_gain_fraction: 0.10         # Don't stop to charge less than 10% battery
+  max_queue_wait_tolerance_min: 30.0     # Maximum acceptable wait time (base case)
+  default_value_of_time_eur_per_hour: 28.0
+  default_price_sensitivity: 1.0
+  default_queue_aversion: 1.0
+  default_risk_tolerance: 0.4
+
+fleet:
+  home_charging_penetration: 0.70       # Fraction of agents with home charging
+  destination_charging_penetration: 0.20
+
+  battery_distribution:
+    small:   { capacity_kwh: 45,  fraction: 0.15 }
+    medium:  { capacity_kwh: 65,  fraction: 0.40 }
+    large:   { capacity_kwh: 77,  fraction: 0.35 }
+    xl:      { capacity_kwh: 100, fraction: 0.10 }
+
+  acceptance_kw_by_battery:
+    small:   80
+    medium:  135
+    large:   150
+    xl:      250
+
+demand:
+  peak_morning_center_min: 420   # 7:00
+  peak_morning_std_min: 60
+  peak_evening_center_min: 1020  # 17:00
+  peak_evening_std_min: 90
+  peak_morning_share: 0.35
+  peak_evening_share: 0.35
+  off_peak_share: 0.30

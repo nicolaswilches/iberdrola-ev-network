@@ -1,0 +1,5 @@
+scenario,num_trips,completion_rate,num_stranded,avg_wait_min,avg_charge_min,total_charge_events,total_energy_kwh,avg_station_utilization,max_peak_queue,avg_wait_at_stations_min
+baseline,178,1.0,0,0.6,38.12,435,14057.9,0.066,2,0.3
+price_reduction,178,1.0,0,0.6,38.12,435,14057.9,0.066,2,0.3
+capacity_increase,178,1.0,0,0.6,38.12,435,14057.9,0.064,2,0.3
+high_home_charging,179,1.0,0,0.63,36.06,421,13139.0,0.062,2,0.3
