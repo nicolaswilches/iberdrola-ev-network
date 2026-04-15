@@ -174,52 +174,91 @@ def _create_agent(
     """
     Create a VehicleAgent from a TripRequest with heterogeneous parameters.
 
-    Parameters are sampled from distributions calibrated to represent
-    a realistic BEV fleet on Spanish interurban roads.
+    When ``spanish_models`` is present in the config (from the fleet section
+    of base_config.yaml), each agent is assigned a real Spanish BEV model
+    sampled by its interurban_share weight.  Vehicle specs (battery, max DC
+    acceptance, highway consumption) come directly from the model datasheet.
+
+    Falls back to the legacy ``battery_distribution`` approach when
+    ``spanish_models`` is absent (e.g. in unit tests or scenario overrides
+    that predated this change).
     """
-    # Fleet mix
-    battery_dist = config.get("fleet_battery_distribution", {
-        "small": {"capacity_kwh": 45, "fraction": 0.15},
-        "medium": {"capacity_kwh": 65, "fraction": 0.40},
-        "large": {"capacity_kwh": 77, "fraction": 0.35},
-        "xl": {"capacity_kwh": 100, "fraction": 0.10},
-    })
-    acceptance_map = config.get("fleet_acceptance_kw", {
-        "small": 80, "medium": 135, "large": 150, "xl": 250
-    })
+    # ------------------------------------------------------------------
+    # Step 1 — Sample vehicle model
+    # ------------------------------------------------------------------
+    spanish_models = config.get("spanish_models")
 
-    types = list(battery_dist.keys())
-    fractions = [battery_dist[t]["fraction"] for t in types]
-    vtype = rng.choice(types, p=fractions)
-    battery_kwh = float(battery_dist[vtype]["capacity_kwh"])
-    acceptance_kw = float(acceptance_map.get(vtype, 150))
+    if spanish_models and isinstance(spanish_models, list) and len(spanish_models) > 0:
+        # Normalise interurban shares (guards against YAML rounding)
+        shares = np.array(
+            [float(m.get("interurban_share", 1.0)) for m in spanish_models],
+            dtype=float,
+        )
+        shares /= shares.sum()
 
-    # Home charging
-    home_pen = config.get("fleet_home_charging_penetration", 0.70)
-    home_charging = rng.random() < home_pen
-    dest_pen = config.get("fleet_destination_charging_penetration", 0.20)
-    dest_charging = rng.random() < dest_pen
+        model_idx = int(rng.choice(len(spanish_models), p=shares))
+        model = spanish_models[model_idx]
 
-    # Behavioral parameters — drawn from plausible distributions
+        battery_kwh = float(model["battery_kwh"])
+        usable_fraction = float(model.get("usable_fraction", 0.90))
+        max_dc_kw = float(model["max_dc_kw"])
+        model_name: str = str(model["model"])
+
+        # Vehicle-to-vehicle consumption variation: ±3 % std dev around
+        # the model's nominal highway figure (terrain, load, driving style)
+        base_consumption = float(model["consumption_kwh_per_km"])
+        consumption = float(
+            rng.normal(base_consumption, base_consumption * 0.03)
+        )
+        consumption = float(np.clip(consumption, 0.12, 0.30))
+
+    else:
+        # Legacy path — generic battery tiers
+        battery_dist = config.get("fleet_battery_distribution", {
+            "small":  {"capacity_kwh": 45,  "fraction": 0.15},
+            "medium": {"capacity_kwh": 65,  "fraction": 0.40},
+            "large":  {"capacity_kwh": 77,  "fraction": 0.35},
+            "xl":     {"capacity_kwh": 100, "fraction": 0.10},
+        })
+        acceptance_map = config.get("fleet_acceptance_kw", {
+            "small": 80, "medium": 135, "large": 150, "xl": 250,
+        })
+        types = list(battery_dist.keys())
+        fractions = [battery_dist[t]["fraction"] for t in types]
+        vtype = str(rng.choice(types, p=fractions))
+        battery_kwh = float(battery_dist[vtype]["capacity_kwh"])
+        usable_fraction = 0.90
+        max_dc_kw = float(acceptance_map.get(vtype, 150))
+        model_name = vtype
+        consumption = float(rng.normal(
+            loc=config.get("default_consumption_kwh_per_km", 0.20),
+            scale=0.02,
+        ))
+        consumption = float(np.clip(consumption, 0.14, 0.28))
+
+    # ------------------------------------------------------------------
+    # Step 2 — Home / destination charging access
+    # ------------------------------------------------------------------
+    home_pen = float(config.get("fleet_home_charging_penetration",
+                                config.get("home_charging_penetration", 0.70)))
+    dest_pen = float(config.get("fleet_destination_charging_penetration",
+                                config.get("destination_charging_penetration", 0.20)))
+    home_charging = bool(rng.random() < home_pen)
+    dest_charging = bool(rng.random() < dest_pen)
+
+    # ------------------------------------------------------------------
+    # Step 3 — Behavioural parameters (heterogeneous across agents)
+    # ------------------------------------------------------------------
+    # Value of time: lognormal, mean €28/h, clipped to [€10, €80]
     vot_eur_hr = float(rng.lognormal(
         mean=np.log(config.get("default_value_of_time_eur_per_hour", 28.0)),
         sigma=0.4,
     ))
     vot_eur_hr = float(np.clip(vot_eur_hr, 10.0, 80.0))
 
-    price_sens = float(rng.lognormal(mean=0.0, sigma=0.3))
-    price_sens = float(np.clip(price_sens, 0.2, 3.0))
-
-    queue_aversion = float(rng.lognormal(mean=0.0, sigma=0.4))
-    queue_aversion = float(np.clip(queue_aversion, 0.1, 4.0))
-
-    risk_tol = float(rng.beta(2, 3))  # mostly risk-averse (mean ~0.4)
-
-    consumption = float(rng.normal(
-        loc=config.get("default_consumption_kwh_per_km", 0.20),
-        scale=0.02,
-    ))
-    consumption = float(np.clip(consumption, 0.14, 0.28))
+    price_sens = float(np.clip(rng.lognormal(mean=0.0, sigma=0.3), 0.2, 3.0))
+    queue_aversion = float(np.clip(rng.lognormal(mean=0.0, sigma=0.4), 0.1, 4.0))
+    risk_tol = float(rng.beta(2, 3))   # mostly risk-averse (mean ≈ 0.4)
 
     return VehicleAgent(
         agent_id=trip.trip_id,
@@ -227,10 +266,10 @@ def _create_agent(
         destination=trip.destination,
         departure_time_min=trip.departure_time_min,
         battery_capacity_kwh=battery_kwh,
-        usable_capacity_kwh=battery_kwh * 0.90,
+        usable_capacity_kwh=battery_kwh * usable_fraction,
         consumption_kwh_per_km=consumption,
-        max_acceptance_kw=acceptance_kw,
-        vehicle_type=vtype,
+        max_acceptance_kw=max_dc_kw,
+        vehicle_type=model_name,
         home_charging_access=home_charging,
         destination_charging_access=dest_charging,
         value_of_time_eur_per_hour=vot_eur_hr,

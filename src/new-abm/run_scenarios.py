@@ -24,6 +24,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from data_generation.spanish_network import build_spain_real_network
 from data_generation.synthetic import build_spain_demo_network
 from outputs.aggregator import compare_scenarios
 from outputs.visualizer import save_all_plots
@@ -50,6 +52,20 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", type=str, default="outputs/scenarios")
     parser.add_argument("--no-plots", action="store_true")
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help=(
+            "Path to data/processed/ directory.  When supplied (or auto-detected "
+            "at ../../data/processed) the real Spanish network is used."
+        ),
+    )
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="Force the synthetic demo network regardless of available data.",
+    )
     args = parser.parse_args()
 
     print("\n" + "=" * 65)
@@ -66,13 +82,39 @@ def main():
         config = yaml.safe_load(f)
 
     # ------------------------------------------------------------------
-    # Build network
+    # Build network — real data preferred, synthetic as fallback
     # ------------------------------------------------------------------
-    print("\n[1/4] Building synthetic network...")
     rng = np.random.default_rng(args.seed)
-    network, stations, od_matrix = build_spain_demo_network(rng=rng)
-    print(f"      {network.node_count} nodes · {network.edge_count} edges · "
-          f"{len(stations)} stations")
+
+    data_dir: Optional[Path] = None
+    if not args.synthetic:
+        if args.data_dir:
+            data_dir = Path(args.data_dir)
+        else:
+            candidate = Path(__file__).parent.parent.parent / "data" / "processed"
+            if candidate.exists():
+                data_dir = candidate
+
+    use_real = data_dir is not None
+
+    if use_real:
+        print(f"\n[1/4] Building real Spanish network from {data_dir} ...")
+        try:
+            network, stations, od_matrix = build_spain_real_network(
+                data_dir=data_dir, rng=rng
+            )
+            network_label = "real"
+        except FileNotFoundError as exc:
+            logger.warning("Real data unavailable (%s); falling back to synthetic.", exc)
+            network, stations, od_matrix = build_spain_demo_network(rng=rng)
+            network_label = "synthetic (fallback)"
+    else:
+        print("\n[1/4] Building synthetic network...")
+        network, stations, od_matrix = build_spain_demo_network(rng=rng)
+        network_label = "synthetic"
+
+    print(f"      [{network_label}] {network.node_count} nodes · "
+          f"{network.edge_count} edges · {len(stations)} stations")
 
     # ------------------------------------------------------------------
     # Generate trips (same for ALL scenarios)
