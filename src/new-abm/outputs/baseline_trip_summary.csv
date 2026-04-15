@@ -1,0 +1,2 @@
+scenario,total_trips,completed,stranded,failed_no_route,completion_rate_pct,avg_trip_duration_min,avg_wait_min,avg_charge_min,avg_charge_stops,pct_zero_stops,total_energy_kwh,total_charge_events
+baseline,41546,25740,15806,0,62.0,245.5,50.91,8.94,0.64,38.3,577970.5,18949

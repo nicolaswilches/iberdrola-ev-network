@@ -46,9 +46,9 @@ logger = logging.getLogger("run_demo")
 
 def main():
     parser = argparse.ArgumentParser(description="BEV Interurban ABM — Baseline Demo")
-    parser.add_argument("--agents", type=int, default=200, help="Number of agents")
+    parser.add_argument("--agents", type=int, default=10000, help="Number of agents")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--output-dir", type=str, default="outputs", help="Output directory")
+    parser.add_argument("--output-dir", type=str, default="src/new-abm/outputs", help="Output directory")
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
     parser.add_argument("--verbose", action="store_true", help="Show DEBUG logs")
     parser.add_argument(
