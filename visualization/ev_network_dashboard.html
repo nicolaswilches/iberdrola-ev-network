@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Iberdrola EV Charging Network — Spain 2027</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: rgba(17, 25, 45, 0.92);
+    --panel-border: rgba(255,255,255,0.08);
+    --text: #e8ecf5;
+    --muted: #8a93a8;
+    --accent: #00a650;        /* Iberdrola green */
+    --accent-2: #7dd3fc;
+    --red: #ef4444;
+    --orange: #f59e0b;
+    --green: #10b981;
+    --blue: #38bdf8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  #map { position: absolute; inset: 0; }
+
+  /* Header */
+  .header {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    padding: 12px 20px;
+    background: linear-gradient(180deg, rgba(11,16,32,0.95) 0%, rgba(11,16,32,0.7) 100%);
+    border-bottom: 1px solid var(--panel-border);
+    display: flex; align-items: center; justify-content: space-between;
+    backdrop-filter: blur(10px);
+  }
+  .header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.2px; }
+  .header h1 .accent { color: var(--accent); }
+  .header .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  /* KPI sidebar (left) */
+  .sidebar {
+    position: fixed; top: 72px; left: 16px; z-index: 9;
+    width: 290px; max-height: calc(100vh - 96px); overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 12px; padding: 16px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  }
+  .sidebar h2 { margin: 0 0 12px 0; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted); }
+  .kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .kpi { background: rgba(255,255,255,0.03); border: 1px solid var(--panel-border); border-radius: 8px; padding: 10px; }
+  .kpi .v { font-size: 22px; font-weight: 700; color: var(--text); line-height: 1.1; }
+  .kpi .l { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 4px; }
+  .kpi.full { grid-column: 1 / -1; }
+  .kpi.accent .v { color: var(--accent); }
+
+  .dso-block { margin-top: 14px; }
+  .dso-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; font-size: 12px; border-bottom: 1px dashed var(--panel-border); }
+  .dso-row:last-child { border-bottom: none; }
+  .dso-row .name { display: flex; align-items: center; gap: 8px; }
+  .dso-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .dso-row .mw { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* Layers panel (right) */
+  .layers {
+    position: fixed; top: 72px; right: 16px; z-index: 9;
+    width: 240px; background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 12px; padding: 14px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  }
+  .layers h2 { margin: 0 0 10px 0; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted); }
+  .layers .group-title { font-size: 10px; color: var(--muted); text-transform: uppercase; margin: 10px 0 4px 0; letter-spacing: 0.5px; }
+  .layer-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; cursor: pointer; user-select: none; }
+  .layer-row:hover { color: var(--accent-2); }
+  .layer-row input { accent-color: var(--accent); cursor: pointer; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex-shrink: 0; }
+  .swatch.line { height: 3px; border-radius: 2px; }
+
+  /* Legend */
+  .legend {
+    position: fixed; bottom: 16px; left: 16px; z-index: 9;
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 10px; padding: 10px 14px; font-size: 11px;
+    backdrop-filter: blur(10px);
+  }
+  .legend .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .legend .title { color: var(--muted); font-size: 10px; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.4px; }
+
+  /* Popups */
+  .maplibregl-popup-content {
+    background: var(--panel) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--panel-border);
+    border-radius: 10px !important;
+    padding: 12px 14px !important;
+    font-size: 12px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+  }
+  .maplibregl-popup-tip { display: none; }
+  .maplibregl-popup-close-button { color: var(--muted) !important; font-size: 18px !important; padding: 4px 8px !important; }
+  .popup-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--accent); }
+  .popup-row { display: flex; justify-content: space-between; gap: 14px; padding: 2px 0; }
+  .popup-row .k { color: var(--muted); }
+  .popup-row .v { font-weight: 500; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+  .pill.red { background: rgba(239,68,68,0.2); color: var(--red); }
+  .pill.orange { background: rgba(245,158,11,0.2); color: var(--orange); }
+  .pill.green { background: rgba(16,185,129,0.2); color: var(--green); }
+
+  /* MapLibre control theming */
+  .maplibregl-ctrl-group { background: var(--panel) !important; border: 1px solid var(--panel-border) !important; }
+  .maplibregl-ctrl-group button { background-color: transparent !important; }
+  .maplibregl-ctrl-attrib { background: rgba(11,16,32,0.6) !important; color: var(--muted) !important; }
+  .maplibregl-ctrl-attrib a { color: var(--muted) !important; }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .sidebar, .layers { width: calc(100% - 32px); }
+    .sidebar { position: fixed; top: unset; bottom: 16px; max-height: 40vh; }
+    .layers { top: 72px; }
+    .legend { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <h1><span class="accent">Iberdrola</span> EV Charging Network — Spain 2027</h1>
+    <div class="sub">Team Greenlabs · IE Sustainability Datathon 2026</div>
+  </div>
+  <div class="sub" id="zoom-indicator"></div>
+</div>
+
+<div id="map"></div>
+
+<aside class="sidebar">
+  <h2>Network KPIs</h2>
+  <div class="kpi-grid">
+    <div class="kpi accent"><div class="v" id="kpi-stations">—</div><div class="l">Proposed stations</div></div>
+    <div class="kpi accent"><div class="v" id="kpi-chargers">—</div><div class="l">Chargers (150 kW)</div></div>
+    <div class="kpi"><div class="v" id="kpi-capacity">—</div><div class="l">Total capacity</div></div>
+    <div class="kpi"><div class="v" id="kpi-friction">—</div><div class="l">Friction points</div></div>
+    <div class="kpi full"><div class="v" id="kpi-evs">—</div><div class="l">Projected EVs by 2027</div></div>
+    <div class="kpi full"><div class="v" id="kpi-baseline">—</div><div class="l">Existing baseline stations</div></div>
+  </div>
+  <h2 style="margin-top:8px">DSO Investment Opportunity</h2>
+  <div class="dso-block" id="dso-block"></div>
+</aside>
+
+<aside class="layers">
+  <h2>Layers</h2>
+  <div class="group-title">Context</div>
+  <label class="layer-row"><input type="checkbox" data-layer="provinces" checked><span class="swatch" style="border:1px solid #64748b; background:transparent;"></span>Spain provinces</label>
+  <label class="layer-row"><input type="checkbox" data-layer="dso-areas"><span class="swatch" style="background:linear-gradient(45deg,#10b981,#38bdf8,#a855f7);"></span>DSO service areas</label>
+
+  <div class="group-title">Infrastructure</div>
+  <label class="layer-row"><input type="checkbox" data-layer="tent" checked><span class="swatch line" style="background:#ef4444;"></span>TEN-T corridors</label>
+  <label class="layer-row"><input type="checkbox" data-layer="substations"><span class="swatch" style="background:#10b981;"></span>Grid substations</label>
+  <label class="layer-row"><input type="checkbox" data-layer="existing"><span class="swatch" style="background:#38bdf8;"></span>Existing chargers</label>
+
+  <div class="group-title">Model Output</div>
+  <label class="layer-row"><input type="checkbox" data-layer="demand"><span class="swatch" style="background:linear-gradient(90deg,#fbbf24,#ef4444);"></span>Demand heatmap</label>
+  <label class="layer-row"><input type="checkbox" data-layer="proposed" checked><span class="swatch" style="background:#00a650;"></span>Proposed stations</label>
+  <label class="layer-row"><input type="checkbox" data-layer="friction" checked><span class="swatch" style="background:#ef4444;"></span>Friction points</label>
+</aside>
+
+<div class="legend">
+  <div class="title">Grid Status</div>
+  <div class="row"><span class="swatch" style="background:#10b981;"></span>Sufficient (≥5 MW)</div>
+  <div class="row"><span class="swatch" style="background:#f59e0b;"></span>Moderate (1–5 MW)</div>
+  <div class="row"><span class="swatch" style="background:#ef4444;"></span>Congested (&lt;1 MW)</div>
+  <div class="title" style="margin-top:8px">TEN-T</div>
+  <div class="row"><span class="swatch line" style="background:#ef4444;"></span>Core (60 km AFIR)</div>
+  <div class="row"><span class="swatch line" style="background:#f59e0b;"></span>Comprehensive (100 km)</div>
+</div>
+
+<script src="dashboard_data.js"></script>
+<script>
+(function() {
+  // ---------- Utilities ----------
+  const DSO_COLORS = { "i-DE": "#10b981", "Endesa": "#38bdf8", "Viesgo": "#a855f7" };
+  const STATUS_COLORS = { "Sufficient": "#10b981", "Moderate": "#f59e0b", "Congested": "#ef4444" };
+  const fmt = (n) => new Intl.NumberFormat("en-US").format(n);
+
+  function pointsToGeoJSON(rows) {
+    return {
+      type: "FeatureCollection",
+      features: rows.map(r => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [+r.lon ?? +r.longitude, +r.lat ?? +r.latitude] },
+        properties: r,
+      })),
+    };
+  }
+  function csvPointsToGeoJSON(rows) {
+    return {
+      type: "FeatureCollection",
+      features: rows.map(r => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [+r.longitude, +r.latitude] },
+        properties: r,
+      })),
+    };
+  }
+
+  // ---------- KPIs ----------
+  const k = DATA_KPIS.summary;
+  document.getElementById("kpi-stations").textContent = k.total_proposed_stations;
+  document.getElementById("kpi-friction").textContent = k.total_friction_points;
+  document.getElementById("kpi-evs").textContent = fmt(k.total_ev_projected_2027);
+  document.getElementById("kpi-baseline").textContent = fmt(k.total_existing_stations_baseline);
+  const totalChargers = DATA_PROPOSED.reduce((s, r) => s + (+r.n_chargers_proposed || 0), 0);
+  document.getElementById("kpi-chargers").textContent = totalChargers;
+  document.getElementById("kpi-capacity").textContent = (totalChargers * 0.15).toFixed(1) + " MW";
+
+  const dsoBlock = document.getElementById("dso-block");
+  DATA_KPIS.dso.forEach(d => {
+    const row = document.createElement("div");
+    row.className = "dso-row";
+    row.innerHTML = `
+      <span class="name"><span class="dso-dot" style="background:${DSO_COLORS[d.distributor_network] || '#888'}"></span>${d.distributor_network}</span>
+      <span class="mw">${d.total_demand_mw.toFixed(1)} MW · ${d.n_friction_points} pts</span>`;
+    dsoBlock.appendChild(row);
+  });
+
+  // ---------- Map init ----------
+  const map = new maplibregl.Map({
+    container: "map",
+    style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+    center: [-3.7, 40.2],
+    zoom: 5.6,
+    minZoom: 4,
+    maxZoom: 14,
+  });
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+  map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-right");
+
+  map.on("zoom", () => {
+    document.getElementById("zoom-indicator").textContent = `zoom ${map.getZoom().toFixed(1)}`;
+  });
+
+  map.on("load", () => {
+    // ---- Provinces ----
+    map.addSource("provinces", { type: "geojson", data: DATA_PROVINCES });
+    map.addLayer({
+      id: "provinces-fill", type: "fill", source: "provinces",
+      paint: { "fill-color": "#1e293b", "fill-opacity": 0.15 },
+    });
+    map.addLayer({
+      id: "provinces-line", type: "line", source: "provinces",
+      paint: { "line-color": "#64748b", "line-width": 0.5, "line-opacity": 0.5 },
+    });
+
+    // ---- TEN-T corridors ----
+    map.addSource("tent", { type: "geojson", data: DATA_TENT });
+    map.addLayer({
+      id: "tent-line", type: "line", source: "tent",
+      paint: {
+        "line-color": [
+          "match", ["downcase", ["coalesce", ["get", "tier"], "none"]],
+          "core", "#ef4444",
+          "comprehensive", "#f59e0b",
+          "#94a3b8",
+        ],
+        "line-width": ["interpolate", ["linear"], ["zoom"], 5, 1.2, 10, 3],
+        "line-opacity": 0.75,
+      },
+    });
+
+    // ---- DSO service areas ----
+    map.addSource("dso-areas", { type: "geojson", data: DATA_DSO_AREAS });
+    map.addLayer({
+      id: "dso-areas-fill", type: "fill", source: "dso-areas",
+      paint: {
+        "fill-color": [
+          "match", ["coalesce", ["get", "distributor_network"], ["get", "dso"], ["get", "DSO"], "?"],
+          "i-DE", "#10b981",
+          "Endesa", "#38bdf8",
+          "Viesgo", "#a855f7",
+          "#475569",
+        ],
+        "fill-opacity": 0.12,
+      },
+      layout: { visibility: "none" },
+    });
+    map.addLayer({
+      id: "dso-areas-line", type: "line", source: "dso-areas",
+      paint: { "line-color": "#94a3b8", "line-width": 0.4, "line-opacity": 0.5 },
+      layout: { visibility: "none" },
+    });
+
+    // ---- Substations ----
+    map.addSource("substations", { type: "geojson", data: pointsToGeoJSON(DATA_SUBSTATIONS) });
+    map.addLayer({
+      id: "substations-pt", type: "circle", source: "substations",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 1.5, 10, 4],
+        "circle-color": [
+          "match", ["get", "status"],
+          "Sufficient", "#10b981",
+          "Moderate", "#f59e0b",
+          "Congested", "#ef4444",
+          "#64748b",
+        ],
+        "circle-opacity": 0.7,
+        "circle-stroke-width": 0.3,
+        "circle-stroke-color": "#0b1020",
+      },
+      layout: { visibility: "none" },
+    });
+
+    // ---- Existing chargers ----
+    map.addSource("existing", { type: "geojson", data: pointsToGeoJSON(DATA_EXISTING_CHARGERS) });
+    map.addLayer({
+      id: "existing-pt", type: "circle", source: "existing",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 1, 10, 3],
+        "circle-color": "#38bdf8",
+        "circle-opacity": 0.55,
+      },
+      layout: { visibility: "none" },
+    });
+
+    // ---- Demand heatmap ----
+    map.addSource("demand", { type: "geojson", data: pointsToGeoJSON(DATA_DEMAND) });
+    map.addLayer({
+      id: "demand-heat", type: "heatmap", source: "demand",
+      paint: {
+        "heatmap-weight": ["interpolate", ["linear"], ["get", "bev"], 0, 0, 5000, 1],
+        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 5, 1, 12, 3],
+        "heatmap-color": [
+          "interpolate", ["linear"], ["heatmap-density"],
+          0, "rgba(0,0,0,0)",
+          0.2, "rgba(251,191,36,0.3)",
+          0.5, "rgba(249,115,22,0.6)",
+          0.8, "rgba(239,68,68,0.8)",
+          1, "rgba(220,38,38,1)",
+        ],
+        "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 5, 14, 12, 40],
+        "heatmap-opacity": 0.75,
+      },
+      layout: { visibility: "none" },
+    });
+
+    // ---- Friction points (pulsing red ring) ----
+    map.addSource("friction", { type: "geojson", data: csvPointsToGeoJSON(DATA_FRICTION) });
+    map.addLayer({
+      id: "friction-halo", type: "circle", source: "friction",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 12, 10, 28],
+        "circle-color": "#ef4444",
+        "circle-opacity": 0.15,
+        "circle-stroke-color": "#ef4444",
+        "circle-stroke-width": 1.5,
+        "circle-stroke-opacity": 0.7,
+      },
+    });
+
+    // ---- Proposed stations ----
+    map.addSource("proposed", { type: "geojson", data: csvPointsToGeoJSON(DATA_PROPOSED) });
+    map.addLayer({
+      id: "proposed-pt", type: "circle", source: "proposed",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 8, 10, 18],
+        "circle-color": "#00a650",
+        "circle-stroke-color": "#ffffff",
+        "circle-stroke-width": 2,
+        "circle-opacity": 0.95,
+      },
+    });
+    map.addLayer({
+      id: "proposed-label", type: "symbol", source: "proposed",
+      layout: {
+        "text-field": ["get", "n_chargers_proposed"],
+        "text-size": 12,
+        "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+        "text-allow-overlap": true,
+      },
+      paint: { "text-color": "#ffffff" },
+    });
+
+    // ---------- Popups ----------
+    const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, maxWidth: "320px" });
+    function showPopup(e, html) {
+      popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    }
+    function statusPill(s) {
+      const cls = s === "Sufficient" ? "green" : s === "Moderate" ? "orange" : "red";
+      return `<span class="pill ${cls}">${s}</span>`;
+    }
+    function kv(k, v) { return `<div class="popup-row"><span class="k">${k}</span><span class="v">${v}</span></div>`; }
+
+    map.on("click", "proposed-pt", (e) => {
+      const p = e.features[0].properties;
+      showPopup(e, `
+        <div class="popup-title">${p.location_id} — Proposed Station</div>
+        ${kv("Route", p.route_segment)}
+        ${kv("Chargers", `${p.n_chargers_proposed} × 150 kW`)}
+        ${kv("Capacity", `${(p.n_chargers_proposed * 0.15).toFixed(2)} MW`)}
+        ${kv("Grid status", statusPill(p.grid_status))}
+      `);
+    });
+
+    map.on("click", "friction-halo", (e) => {
+      const p = e.features[0].properties;
+      showPopup(e, `
+        <div class="popup-title">${p.bottleneck_id} — Friction Point</div>
+        ${kv("Route", p.route_segment)}
+        ${kv("DSO", p.distributor_network)}
+        ${kv("Demand", `${p.estimated_demand_kw} kW`)}
+        ${kv("Grid status", statusPill(p.grid_status))}
+      `);
+    });
+
+    map.on("click", "substations-pt", (e) => {
+      const p = e.features[0].properties;
+      showPopup(e, `
+        <div class="popup-title">Substation ${p.name}</div>
+        ${kv("DSO", p.dso)}
+        ${kv("Available", `${(+p.mw).toFixed(2)} MW`)}
+        ${kv("Voltage", `${p.kv} kV`)}
+        ${kv("Status", statusPill(p.status))}
+      `);
+    });
+
+    map.on("click", "existing-pt", (e) => {
+      const p = e.features[0].properties;
+      showPopup(e, `
+        <div class="popup-title">Existing Charger</div>
+        ${kv("Road", p.road || "—")}
+        ${kv("Power", `${p.kw} kW`)}
+      `);
+    });
+
+    // Hover cursor
+    ["proposed-pt", "friction-halo", "substations-pt", "existing-pt"].forEach(id => {
+      map.on("mouseenter", id, () => map.getCanvas().style.cursor = "pointer");
+      map.on("mouseleave", id, () => map.getCanvas().style.cursor = "");
+    });
+
+    // ---------- Layer toggle mapping ----------
+    const layerMap = {
+      "provinces": ["provinces-fill", "provinces-line"],
+      "tent": ["tent-line"],
+      "dso-areas": ["dso-areas-fill", "dso-areas-line"],
+      "substations": ["substations-pt"],
+      "existing": ["existing-pt"],
+      "demand": ["demand-heat"],
+      "proposed": ["proposed-pt", "proposed-label"],
+      "friction": ["friction-halo"],
+    };
+    document.querySelectorAll(".layer-row input[type=checkbox]").forEach(cb => {
+      cb.addEventListener("change", () => {
+        const ids = layerMap[cb.dataset.layer] || [];
+        const vis = cb.checked ? "visible" : "none";
+        ids.forEach(id => map.setLayoutProperty(id, "visibility", vis));
+      });
+    });
+
+    // ---------- Pulse animation for friction halos ----------
+    let t = 0;
+    function pulse() {
+      t += 0.04;
+      const factor = 1 + 0.25 * Math.sin(t);
+      if (map.getLayer("friction-halo")) {
+        map.setPaintProperty("friction-halo", "circle-radius",
+          ["interpolate", ["linear"], ["zoom"], 5, 12 * factor, 10, 28 * factor]);
+      }
+      requestAnimationFrame(pulse);
+    }
+    pulse();
+  });
+})();
+</script>
+</body>
+</html>
