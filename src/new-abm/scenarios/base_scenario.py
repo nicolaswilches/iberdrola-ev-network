@@ -212,4 +212,8 @@ def load_scenario_from_yaml(path: str) -> ScenarioConfig:
     if "global_price_multiplier" in mods:
         sc.global_price_multiplier = float(mods["global_price_multiplier"])
 
+    # Demand volume
+    if "demand_volume_multiplier" in mods:
+        sc.demand_volume_multiplier = float(mods["demand_volume_multiplier"])
+
     return sc

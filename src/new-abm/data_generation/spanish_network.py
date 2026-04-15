@@ -233,7 +233,7 @@ def build_spain_real_network(
     data_dir: Path,
     rng: Optional[np.random.Generator] = None,
     include_proposed_stations: bool = True,
-    max_existing_clusters_per_road: int = 6,
+    max_existing_clusters_per_road: int = 16,
 ) -> Tuple[RoadNetwork, List[ChargingStation], ODMatrix]:
     """
     Build the real Spanish interurban network from processed pipeline data.
@@ -556,7 +556,7 @@ def _cluster_chargers_on_road(
     for cid, grp in road_ch.groupby("_cluster"):
         lat = float(grp["latitude"].median())
         lon = float(grp["longitude"].median())
-        n_connectors = min(int(grp["n_connectors"].fillna(2).astype(int).sum()), 20)
+        n_connectors = int(grp["n_connectors"].fillna(2).astype(int).sum())
         n_connectors = max(1, n_connectors)
         max_power = float(grp["max_power_kw"].fillna(50).max())
 

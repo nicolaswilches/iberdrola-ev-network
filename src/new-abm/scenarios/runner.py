@@ -85,9 +85,24 @@ class ScenarioRunner:
             mod_stations, mod_config = apply_scenario(
                 sc, self.base_stations, self.base_config
             )
+            # Scale trip count if demand_volume_multiplier != 1.0
+            trips_for_scenario = self.trip_requests
+            if sc.demand_volume_multiplier != 1.0:
+                n_scaled = int(len(self.trip_requests) * sc.demand_volume_multiplier)
+                import numpy as np
+                rng_scale = np.random.default_rng(seed + 999)
+                if n_scaled > len(self.trip_requests):
+                    # Oversample with replacement
+                    indices = rng_scale.choice(len(self.trip_requests), size=n_scaled, replace=True)
+                    trips_for_scenario = [self.trip_requests[i] for i in indices]
+                else:
+                    # Subsample
+                    indices = rng_scale.choice(len(self.trip_requests), size=n_scaled, replace=False)
+                    trips_for_scenario = [self.trip_requests[i] for i in indices]
+                logger.info("Demand scaled %.1fx: %d -> %d trips", sc.demand_volume_multiplier, len(self.trip_requests), n_scaled)
             runner = SimulationRunner(self.network, mod_stations, mod_config)
             self._results[sc.name] = runner.run(
-                self.trip_requests, scenario_name=sc.name, seed=seed
+                trips_for_scenario, scenario_name=sc.name, seed=seed
             )
 
         comparison_df = self._build_comparison_table()

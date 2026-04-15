@@ -1,0 +1,22 @@
+# Scenario: Expand existing high-traffic hubs
+# Add 8 connectors at the busiest bottleneck stations identified from baseline.
+# Tests whether expanding existing hubs reduces queues more cost-effectively
+# than building entirely new stations.
+name: expand_hubs
+description: "Add 8 connectors at top-14 bottleneck stations. Tests hub expansion vs new station construction."
+modifications:
+  station_connector_delta:
+    STA_0003: 8
+    EC_A-92_14: 8
+    EC_A-66_12: 8
+    EC_A-66_11: 8
+    EC_A-66_10: 8
+    EC_A-92_00: 8
+    EC_AP-1_08: 8
+    EC_AP-46_00: 8
+    EC_A-23_02: 8
+    EC_AP-68_09: 8
+    EC_A-23_04: 8
+    EC_AP-4_08: 8
+    EC_AP-4_07: 8
+    EC_AP-2_09: 8

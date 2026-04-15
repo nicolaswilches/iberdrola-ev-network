@@ -36,6 +36,7 @@ from data_generation.spanish_network import build_spain_real_network
 from data_generation.synthetic import build_spain_demo_network
 from outputs.aggregator import compare_scenarios
 from outputs.visualizer import save_all_plots
+from scenarios.base_scenario import ScenarioConfig, load_scenario_from_yaml
 from scenarios.runner import ScenarioRunner, make_demo_scenarios
 
 logging.basicConfig(
@@ -101,7 +102,8 @@ def main():
         print(f"\n[1/4] Building real Spanish network from {data_dir} ...")
         try:
             network, stations, od_matrix = build_spain_real_network(
-                data_dir=data_dir, rng=rng
+                data_dir=data_dir, rng=rng,
+                max_existing_clusters_per_road=16,
             )
             network_label = "real"
         except FileNotFoundError as exc:
@@ -129,9 +131,18 @@ def main():
     # ------------------------------------------------------------------
     # Run scenarios
     # ------------------------------------------------------------------
-    print("\n[3/4] Running 4 scenarios (baseline + 3 modifications)...")
+    # Load scenario configs: summer peak + expand hubs + original demos
+    scenario_dir = Path(__file__).parent / "config" / "scenarios"
+    custom_scenarios = []
+    for sc_name in ["summer_peak", "expand_hubs"]:
+        sc_path = scenario_dir / f"{sc_name}.yaml"
+        if sc_path.exists():
+            custom_scenarios.append(load_scenario_from_yaml(str(sc_path)))
+
+    all_scenarios = custom_scenarios + make_demo_scenarios()
+    print(f"\n[3/4] Running {1 + len(all_scenarios)} scenarios (baseline + {len(all_scenarios)} modifications)...")
     sc_runner = ScenarioRunner(network, stations, config, trips)
-    for sc in make_demo_scenarios():
+    for sc in all_scenarios:
         sc_runner.add_scenario(sc)
 
     t0 = time.time()
