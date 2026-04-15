@@ -2,7 +2,7 @@
 # All time units: minutes. All energy: kWh. All distance: km. All money: EUR.
 
 simulation:
-  sim_duration_min: 1440        # 24-hour simulation window
+  sim_duration_min: 2880        # 48-hour window — lets late-evening trips complete
   random_seed: 42
   num_agents: 200               # Number of trip agents to simulate
   log_level: INFO

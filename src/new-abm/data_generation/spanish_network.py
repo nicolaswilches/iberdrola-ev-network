@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -232,7 +233,7 @@ def build_spain_real_network(
     data_dir: Path,
     rng: Optional[np.random.Generator] = None,
     include_proposed_stations: bool = True,
-    max_existing_clusters_per_road: int = 4,
+    max_existing_clusters_per_road: int = 6,
 ) -> Tuple[RoadNetwork, List[ChargingStation], ODMatrix]:
     """
     Build the real Spanish interurban network from processed pipeline data.
@@ -507,6 +508,13 @@ def _build_corridors_and_stations(
 # Existing charger clustering
 # ---------------------------------------------------------------------------
 
+def _normalise_road(name: str) -> str:
+    """Normalise road name for fuzzy matching: strip directional suffixes, AP->A."""
+    name = name.strip().rstrip("NSEWnsew")
+    name = re.sub(r'^AP-', 'A-', name)
+    return name
+
+
 def _cluster_chargers_on_road(
     road_name: str,
     chargers_df: pd.DataFrame,
@@ -518,11 +526,14 @@ def _cluster_chargers_on_road(
     Cluster baseline chargers on *road_name* into ≤max_clusters groups and
     return waypoint descriptors + ChargingStation objects.
     """
-    # Match rows by nearest_road column (strip whitespace for safety)
     if "nearest_road" not in chargers_df.columns:
         return [], []
 
-    mask = chargers_df["nearest_road"].fillna("").str.strip() == road_name.strip()
+    # Fuzzy match: normalise both the corridor road name and the charger
+    # nearest_road column so "AP-7" matches "A-7", "A-7S" matches "A-7", etc.
+    norm_target = _normalise_road(road_name)
+    norm_col = chargers_df["nearest_road"].fillna("").apply(_normalise_road)
+    mask = norm_col == norm_target
     road_ch = chargers_df[mask].copy()
 
     if road_ch.empty:
@@ -545,7 +556,7 @@ def _cluster_chargers_on_road(
     for cid, grp in road_ch.groupby("_cluster"):
         lat = float(grp["latitude"].median())
         lon = float(grp["longitude"].median())
-        n_connectors = int(grp["n_connectors"].fillna(2).astype(int).sum())
+        n_connectors = min(int(grp["n_connectors"].fillna(2).astype(int).sum()), 20)
         n_connectors = max(1, n_connectors)
         max_power = float(grp["max_power_kw"].fillna(50).max())
 
@@ -696,6 +707,31 @@ def _build_od_matrix(
             "Check that route_segment names in demand_per_segment.csv "
             "match the road names in _ROAD_CORRIDORS."
         )
+
+    # Filter out infeasible OD pairs (> 700 km network distance).
+    # Small-battery BEVs (e.g. MG4 Standard, 255 km range) cannot
+    # complete ultra-long-haul trips if intermediate coverage is thin.
+    max_feasible_km = 700.0
+    feasible_pairs = []
+    dropped = 0
+    for pair in od.pairs:
+        try:
+            dist = network.shortest_path_length(
+                pair.origin, pair.destination, weight="distance_km"
+            )
+        except Exception:
+            dist = 0.0
+        if dist <= max_feasible_km or dist == 0.0:
+            feasible_pairs.append(pair)
+        else:
+            dropped += 1
+            logger.debug(
+                "Dropped infeasible OD pair %s->%s (%.0f km)",
+                pair.origin, pair.destination, dist,
+            )
+    if dropped:
+        logger.info("Filtered %d infeasible OD pairs (> %.0f km)", dropped, max_feasible_km)
+    od.pairs = feasible_pairs
 
     # Wire observed link counts for calibration interface
     od.set_observed_counts({

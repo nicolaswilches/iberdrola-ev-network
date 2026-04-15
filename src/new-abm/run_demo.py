@@ -108,7 +108,8 @@ def main():
         print(f"\n[1/5] Building real Spanish network from {data_dir} ...")
         try:
             network, stations, od_matrix = build_spain_real_network(
-                data_dir=data_dir, rng=rng
+                data_dir=data_dir, rng=rng,
+                max_existing_clusters_per_road=8,
             )
             network_label = "real"
         except FileNotFoundError as exc:
