@@ -75,13 +75,19 @@ def plan_route_with_stops(
     """
     Compute an energy-feasible route + ordered list of charging stops.
 
+    Route choice uses generalized cost (travel time + toll / VoT) so that
+    high-VoT agents prefer fast AP- toll motorways while budget-conscious
+    agents take the slower parallel free A-/N- roads.
+
     Returns
     -------
     route:          full node list from origin to destination
     charging_stops: ordered list of ChargingStation objects the agent
                     plans to use (may be empty for short trips)
     """
-    route = network.shortest_path(agent.origin, agent.destination)
+    route = network.shortest_path_gc(agent.origin, agent.destination,
+                                     agent.value_of_time_eur_per_hour,
+                                     agent.max_comfortable_speed_kmh)
     if not route:
         logger.warning(
             "Agent %s: no path found %s → %s",
@@ -103,21 +109,28 @@ def _plan_charging_stops(
     """
     Walk the route and insert the minimum necessary charging stops.
 
-    Strategy (farthest-reachable greedy):
+    Strategy (comfortable-arrival greedy):
     - In each iteration, find the FARTHEST waypoint (station or destination)
-      the agent can reach from the current position with reserve SOC intact.
-    - If that farthest waypoint is the destination, the agent drives straight
-      through without stopping.
-    - If it is an intermediate station, the agent stops there and charges to
-      80% before the next iteration.
-    - If no waypoint is reachable at all, the route is infeasible.
+      the agent can reach while still arriving with a "comfortable" SOC
+      (reserve + comfort margin, default 30% of usable capacity).
+    - If no such waypoint exists with the comfort margin, fall back to the
+      farthest waypoint reachable with only the hard reserve (10%).
+    - This causes agents to stop earlier and more often at well-provisioned
+      corridor stations rather than funneling to a single bottleneck station
+      right at the edge of their range.
 
-    This avoids the earlier "skip if SOC > 50%" heuristic, which allowed the
-    planner to pass through a needed station and then get stuck with nothing
-    reachable ahead.
+    Why not "farthest reachable with reserve only":
+    - The hard-reserve strategy (10%) makes large-battery agents skip every
+      intermediate station on a corridor and converge on the last reachable
+      stop, which often has far fewer connectors than the stations they passed.
+    - Real drivers also do not run batteries to 10%: they stop when
+      approaching ~25–30% SOC to avoid range anxiety.
     """
     min_reserve = config.get("min_reserve_soc_fraction", 0.10)
+    comfort_frac = config.get("arrival_comfort_soc_fraction", 0.20)
     reserve_kwh = agent.usable_capacity_kwh * min_reserve
+    # comfort_kwh: target arriving SOC for intermediate stops (not destination)
+    comfort_kwh = agent.usable_capacity_kwh * (min_reserve + comfort_frac)
 
     # Find all stations along the route (by node index)
     station_indices: Dict[int, ChargingStation] = {}
@@ -135,7 +148,7 @@ def _plan_charging_stops(
     current_idx = 0
 
     while current_idx < destination_idx:
-        # Find the FARTHEST reachable candidate from current position
+        # --- Pass 1: farthest waypoint reachable with comfortable arrival SOC ---
         best_idx = None
         for waypoint_idx in reversed(candidates):
             if waypoint_idx <= current_idx:
@@ -144,9 +157,31 @@ def _plan_charging_stops(
             energy_needed = compute_segment_energy(
                 segment, network, agent.consumption_kwh_per_km
             )
-            if soc - energy_needed >= reserve_kwh:
-                best_idx = waypoint_idx
-                break
+            arriving_soc = soc - energy_needed
+
+            if waypoint_idx == destination_idx:
+                # Destination only needs hard reserve
+                if arriving_soc >= reserve_kwh:
+                    best_idx = waypoint_idx
+                    break
+            else:
+                # Intermediate station: require comfortable arrival SOC
+                if arriving_soc >= comfort_kwh:
+                    best_idx = waypoint_idx
+                    break
+
+        # --- Pass 2 fallback: farthest reachable with only hard reserve ---
+        if best_idx is None:
+            for waypoint_idx in reversed(candidates):
+                if waypoint_idx <= current_idx:
+                    continue
+                segment = route[current_idx : waypoint_idx + 1]
+                energy_needed = compute_segment_energy(
+                    segment, network, agent.consumption_kwh_per_km
+                )
+                if soc - energy_needed >= reserve_kwh:
+                    best_idx = waypoint_idx
+                    break
 
         if best_idx is None:
             logger.warning(

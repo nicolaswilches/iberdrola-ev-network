@@ -216,8 +216,23 @@ _SEGMENT_KM: Dict[Tuple[str, str], float] = {
     ("PAL", "BUR"):  95, ("BUR", "PAL"):  95,
 }
 
-# Speed limits by road prefix (km/h) — used to derive travel time
-_SPEED_KMH: Dict[str, float] = {"AP": 120.0, "A": 100.0, "N": 90.0}
+# Speed limits by road prefix (km/h) — used to derive travel time.
+# AP- (autopista) and A- (autovía) are both 120 km/h dual carriageways.
+# The difference is tolls (AP-) vs free (A-), not speed.
+# N- (carretera nacional, older single/dual carriageway) → 90 km/h.
+_SPEED_KMH: Dict[str, float] = {"AP": 140.0, "A": 120.0, "N": 90.0}
+
+# Toll rates (EUR per km, one-way) for AP- roads still under concession in 2027.
+# Sources: Ministerio de Transportes tariff tables; AP-1 and AP-4 concessions
+# expired before 2027 and are now toll-free.  Default for unlisted AP- roads: 0.
+_TOLL_EUR_PER_KM: Dict[str, float] = {
+    "AP-2":  0.045,   # Zaragoza–Barcelona (Abertis/Acesa): ~€14 for 310 km
+    "AP-7":  0.035,   # Mediterranean coast (Abertis/Aucat): ~€12 for 350 km
+    "AP-68": 0.040,   # Bilbao–Zaragoza (Euskal Errepideak / Itinere)
+    "AP-9":  0.025,   # Galicia ring roads (Autopistas do Atlántico)
+    "AP-46": 0.050,   # Málaga–Granada short section (Aucosta)
+    # AP-1 (expired 2018) and AP-4 (never tolled) are intentionally absent → 0.
+}
 
 # Default price per kWh for existing stations (EUR) — NAP data lacks prices
 _DEFAULT_PRICE_EUR_KWH = 0.40
@@ -276,7 +291,6 @@ def build_spain_real_network(
         network=network,
         chargers_df=chargers_df,
         proposed_df=proposed_df,
-        road_lengths=road_lengths,
         include_proposed=include_proposed_stations,
         max_clusters=max_existing_clusters_per_road,
     )
@@ -372,7 +386,6 @@ def _build_corridors_and_stations(
     network: RoadNetwork,
     chargers_df: pd.DataFrame,
     proposed_df: pd.DataFrame,
-    road_lengths: Dict[str, float],
     include_proposed: bool,
     max_clusters: int,
 ) -> List[ChargingStation]:
@@ -469,6 +482,9 @@ def _build_corridors_and_stations(
                 seen.add(nid)
                 deduped.append((km, nid))
 
+        # Toll rate for this road (0 for free roads)
+        toll_rate = _TOLL_EUR_PER_KM.get(road_name, 0.0)
+
         # Build directed edges between consecutive nodes in the chain
         for i in range(len(deduped) - 1):
             km_a, nid_a = deduped[i]
@@ -491,6 +507,7 @@ def _build_corridors_and_stations(
                 road_type=road_prefix,
                 speed_limit_kmh=speed,
                 slope_grade=0.0,
+                toll_eur=seg_km * toll_rate,
             )
             try:
                 network.add_undirected_road(edge)

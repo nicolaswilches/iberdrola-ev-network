@@ -54,6 +54,7 @@ class RoadEdge:
     road_type: str           # "AP" (motorway) | "A" (national) | "N" (secondary)
     speed_limit_kmh: float = 120.0
     slope_grade: float = 0.0  # positive = uphill from→to, negative = downhill
+    toll_eur: float = 0.0    # one-way toll cost in EUR for this segment
 
     @property
     def free_flow_speed_kmh(self) -> float:
@@ -126,7 +127,8 @@ class RoadNetwork:
             road_type=edge.road_type,
             speed_limit_kmh=edge.speed_limit_kmh,
             slope_grade=edge.slope_grade,
-            weight=edge.travel_time_min,  # default weight = travel time
+            toll_eur=edge.toll_eur,
+            weight=edge.travel_time_min,  # default weight = travel time (no toll)
         )
 
     def add_undirected_road(self, edge: RoadEdge) -> None:
@@ -162,6 +164,45 @@ class RoadNetwork:
             return nx.shortest_path(self.graph, origin, destination, weight=weight)
         except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
             logger.warning("No path %s → %s: %s", origin, destination, exc)
+            return []
+
+    def shortest_path_gc(
+        self,
+        origin: str,
+        destination: str,
+        vot_eur_per_hour: float,
+        max_comfortable_speed_kmh: Optional[float] = None,
+    ) -> List[str]:
+        """Shortest path by generalized cost: travel_time + toll_eur / vot_per_min.
+
+        Agents with high value-of-time pay tolls to use faster AP- motorways;
+        budget-conscious agents accept slower A-/N- roads to avoid tolls.
+
+        If max_comfortable_speed_kmh is provided, each edge's travel time is
+        recomputed as distance / min(road_speed, comfort_speed) so that an
+        agent who self-selects a cruise speed below the road limit gets no
+        benefit from using a faster road — and therefore no incentive to pay
+        a toll for the speed premium they won't use.
+        Falls back to travel-time-only routing when VoT is zero.
+        """
+        if vot_eur_per_hour <= 0:
+            return self.shortest_path(origin, destination)
+        vot_per_min = vot_eur_per_hour / 60.0
+
+        def _gc(_u: str, _v: str, d: dict) -> float:
+            if max_comfortable_speed_kmh is not None:
+                road_speed = d.get("speed_limit_kmh", 120.0)
+                eff_speed = min(road_speed, max_comfortable_speed_kmh)
+                dist = d.get("distance_km", 0.0)
+                travel_time = (dist / eff_speed * 60.0) if eff_speed > 0 else float("inf")
+            else:
+                travel_time = d.get("travel_time_min", 0.0)
+            return travel_time + d.get("toll_eur", 0.0) / vot_per_min
+
+        try:
+            return nx.shortest_path(self.graph, origin, destination, weight=_gc)
+        except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
+            logger.warning("No GC path %s → %s: %s", origin, destination, exc)
             return []
 
     def shortest_path_length(

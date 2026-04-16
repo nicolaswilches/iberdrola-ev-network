@@ -79,7 +79,9 @@ def decide_initial_soc(
     if rng is None:
         rng = np.random.default_rng()
 
-    route = network.shortest_path(agent.origin, agent.destination)
+    route = network.shortest_path_gc(agent.origin, agent.destination,
+                                     agent.value_of_time_eur_per_hour,
+                                     agent.max_comfortable_speed_kmh)
     trip_distance_km = network.subpath_distance_km(route) if route else 200.0
 
     # Count charging stations reachable on the route

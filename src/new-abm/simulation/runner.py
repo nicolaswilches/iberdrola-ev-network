@@ -260,6 +260,16 @@ def _create_agent(
     queue_aversion = float(np.clip(rng.lognormal(mean=0.0, sigma=0.4), 0.1, 4.0))
     risk_tol = float(rng.beta(2, 3))   # mostly risk-averse (mean ≈ 0.4)
 
+    # Comfortable cruise speed: centered at 125 km/h, weakly correlated with VoT.
+    # High-VoT agents (business, time-pressured) tend to drive slightly faster.
+    # Bonus: ±10 km/h across the full VoT range [10, 80].
+    # This makes AP- speed advantage (140 vs 120 km/h) matter only for agents
+    # who both drive fast AND have high enough VoT to justify the toll.
+    _vot_speed_bonus = 10.0 * np.log(vot_eur_hr / 28.0) / np.log(80.0 / 28.0)
+    comfortable_speed = float(np.clip(
+        rng.normal(125.0, 12.0) + _vot_speed_bonus, 90.0, 145.0
+    ))
+
     return VehicleAgent(
         agent_id=trip.trip_id,
         origin=trip.origin,
@@ -276,6 +286,7 @@ def _create_agent(
         price_sensitivity=price_sens,
         queue_aversion=queue_aversion,
         risk_tolerance=risk_tol,
+        max_comfortable_speed_kmh=comfortable_speed,
     )
 
 

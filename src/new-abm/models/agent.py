@@ -54,6 +54,7 @@ class VehicleAgent:
     risk_tolerance: float = 0.4               # 0 = very risk-averse, 1 = risk-seeking
     minimum_reserve_soc_fraction: float = 0.10 # never deplete below this
     network_familiarity: float = 0.5           # 0 = tourist, 1 = commuter
+    max_comfortable_speed_kmh: float = 125.0  # self-selected cruise speed; caps road speed limit
 
     # ------------------------------------------------------------------
     # Mutable state — updated during simulation
