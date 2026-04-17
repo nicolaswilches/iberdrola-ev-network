@@ -682,9 +682,20 @@ def _build_od_matrix(
         )
         return ODMatrix()
 
+    # Length-weighted mean per road: approximates avg vehicles passing any point
+    # on the corridor, which proxies unique end-to-end trips. Plain .sum() would
+    # count every through-trip once per segment it traverses (~25x inflation).
+    def _lw_mean(grp: pd.DataFrame) -> float:
+        total_len = grp["length_km"].sum()
+        if total_len <= 0:
+            return float(grp["daily_bev_traffic_2027"].mean())
+        return float(
+            (grp["daily_bev_traffic_2027"] * grp["length_km"]).sum() / total_len
+        )
+
     road_demand = (
-        demand_df.groupby("route_segment")["daily_bev_traffic_2027"]
-        .sum()
+        demand_df.groupby("route_segment")
+        .apply(_lw_mean)
         .to_dict()
     )
 
