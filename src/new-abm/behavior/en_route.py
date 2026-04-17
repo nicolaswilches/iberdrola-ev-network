@@ -66,18 +66,20 @@ def decide_to_charge_here(
     """
     min_reserve_frac = config.get("min_reserve_soc_fraction", 0.10)
     reserve_kwh = agent.usable_capacity_kwh * min_reserve_frac
+    no_dest_frac = config.get("no_dest_charger_arrival_soc_fraction", 0.50)
+    dest_reserve_kwh = (agent.usable_capacity_kwh * no_dest_frac
+                        if not agent.destination_charging_access
+                        else reserve_kwh)
 
     # --- Is the agent forced to charge here? ---
-    # Check if skipping would leave insufficient SOC to reach the next station
     next_station_node, energy_to_next = _next_station_ahead(
         station.node_id, remaining_route, stations_by_node, network, agent
     )
 
     if next_station_node is None:
-        # No more stations: must charge here if we need energy
         remaining_distance = network.subpath_distance_km(remaining_route)
         energy_to_dest = remaining_distance * agent.consumption_kwh_per_km
-        if agent.current_soc_kwh - energy_to_dest < reserve_kwh:
+        if agent.current_soc_kwh - energy_to_dest < dest_reserve_kwh:
             logger.debug(
                 "Agent %s forced to charge at %s (no stations ahead)",
                 agent.agent_id, station.station_id,

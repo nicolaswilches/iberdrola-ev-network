@@ -16,6 +16,7 @@ energy_model:
 
 behavior:
   min_reserve_soc_fraction: 0.10 # Never let SOC drop below this
+  no_dest_charger_arrival_soc_fraction: 0.50 # Arrive with 50% if no charger at destination
   arrival_comfort_soc_fraction:
     0.15 # Comfort margin above reserve for intermediate stops
     # Agents stop at the farthest station where they arrive

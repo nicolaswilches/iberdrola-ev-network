@@ -248,7 +248,7 @@ def build_spain_real_network(
     data_dir: Path,
     rng: Optional[np.random.Generator] = None,
     include_proposed_stations: bool = True,
-    max_existing_clusters_per_road: int = 16,
+    cluster_stations_per_group: int = 10,
 ) -> Tuple[RoadNetwork, List[ChargingStation], ODMatrix]:
     """
     Build the real Spanish interurban network from processed pipeline data.
@@ -264,11 +264,11 @@ def build_spain_real_network(
     include_proposed_stations:
         When True, the 8 AFIR gap-fill stations from ``proposed_stations.csv``
         are added as waypoint nodes on their respective corridors.
-    max_existing_clusters_per_road:
-        Maximum number of station cluster waypoints to insert per road from
-        the baseline charger data.  Capped at the actual number of stations
-        found on that road.  Larger values give finer resolution but a bigger
-        graph.
+    cluster_stations_per_group:
+        Target number of real stations per cluster group.  Roads with fewer
+        than this many stations get full resolution (one node per station).
+        Larger roads get ``ceil(n_stations / cluster_stations_per_group)``
+        clusters.  Default 10 balances accuracy with graph size.
 
     Returns
     -------
@@ -292,7 +292,7 @@ def build_spain_real_network(
         chargers_df=chargers_df,
         proposed_df=proposed_df,
         include_proposed=include_proposed_stations,
-        max_clusters=max_existing_clusters_per_road,
+        cluster_stations_per_group=cluster_stations_per_group,
     )
 
     # 4. OD matrix calibrated to 2027 BEV demand
@@ -387,11 +387,11 @@ def _build_corridors_and_stations(
     chargers_df: pd.DataFrame,
     proposed_df: pd.DataFrame,
     include_proposed: bool,
-    max_clusters: int,
+    cluster_stations_per_group: int,
 ) -> List[ChargingStation]:
     """
     For every corridor in ``_ROAD_CORRIDORS``:
-      1. Cluster baseline chargers on that road into ≤max_clusters waypoints.
+      1. Cluster baseline chargers on that road into dynamic-sized groups.
       2. Optionally insert proposed stations as waypoints.
       3. Add all waypoint nodes to *network*.
       4. Build a chain of edges through city nodes + station waypoints in
@@ -423,7 +423,7 @@ def _build_corridors_and_stations(
             chargers_df=chargers_df,
             city_chain=city_chain,
             network=network,
-            max_clusters=max_clusters,
+            cluster_stations_per_group=cluster_stations_per_group,
         )
         waypoints.extend(charger_wps)
         all_stations.extend(charger_stations)
@@ -537,17 +537,17 @@ def _cluster_chargers_on_road(
     chargers_df: pd.DataFrame,
     city_chain: List[str],
     network: RoadNetwork,
-    max_clusters: int,
+    cluster_stations_per_group: int = 10,
 ) -> Tuple[List[Tuple[float, str, float, float]], List[ChargingStation]]:
     """
-    Cluster baseline chargers on *road_name* into ≤max_clusters groups and
-    return waypoint descriptors + ChargingStation objects.
+    Cluster baseline chargers on *road_name* into dynamic-sized groups.
+
+    Small roads (≤ cluster_stations_per_group stations) get full resolution.
+    Larger roads get ceil(n / cluster_stations_per_group) clusters.
     """
     if "nearest_road" not in chargers_df.columns:
         return [], []
 
-    # Fuzzy match: normalise both the corridor road name and the charger
-    # nearest_road column so "AP-7" matches "A-7", "A-7S" matches "A-7", etc.
     norm_target = _normalise_road(road_name)
     norm_col = chargers_df["nearest_road"].fillna("").apply(_normalise_road)
     mask = norm_col == norm_target
@@ -556,11 +556,15 @@ def _cluster_chargers_on_road(
     if road_ch.empty:
         return [], []
 
-    # Sort by segment_id as a proxy for along-road position
     if "segment_id" in road_ch.columns:
         road_ch = road_ch.sort_values("segment_id").reset_index(drop=True)
 
-    n_clusters = min(max_clusters, len(road_ch))
+    import math
+    n_stations = len(road_ch)
+    if n_stations <= cluster_stations_per_group:
+        n_clusters = n_stations
+    else:
+        n_clusters = math.ceil(n_stations / cluster_stations_per_group)
 
     # Assign cluster label by equal-size quantile split
     road_ch["_cluster"] = (
@@ -578,8 +582,8 @@ def _cluster_chargers_on_road(
         max_power = float(grp["max_power_kw"].fillna(50).max())
 
         km_pos = _project_onto_polyline(lat, lon, city_chain, network)
-        node_id = f"{road_name}_EC{cid:02d}"
-        station_id = f"EC_{road_name}_{cid:02d}"
+        node_id = f"{road_name}_EC{cid:03d}"
+        station_id = f"EC_{road_name}_{cid:03d}"
 
         waypoints.append((km_pos, node_id, lat, lon))
         stations.append(

@@ -103,7 +103,7 @@ def main():
         try:
             network, stations, od_matrix = build_spain_real_network(
                 data_dir=data_dir, rng=rng,
-                max_existing_clusters_per_road=16,
+                cluster_stations_per_group=10,
             )
             network_label = "real"
         except FileNotFoundError as exc:

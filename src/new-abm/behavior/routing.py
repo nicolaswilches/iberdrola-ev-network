@@ -128,8 +128,14 @@ def _plan_charging_stops(
     """
     min_reserve = config.get("min_reserve_soc_fraction", 0.10)
     comfort_frac = config.get("arrival_comfort_soc_fraction", 0.20)
+    no_dest_charger_frac = config.get("no_dest_charger_arrival_soc_fraction", 0.50)
     reserve_kwh = agent.usable_capacity_kwh * min_reserve
-    # comfort_kwh: target arriving SOC for intermediate stops (not destination)
+    # Agents without a charger at destination need to arrive with enough
+    # SOC for local driving until they can find one (~50%).
+    if not agent.destination_charging_access:
+        dest_reserve_kwh = agent.usable_capacity_kwh * no_dest_charger_frac
+    else:
+        dest_reserve_kwh = reserve_kwh
     comfort_kwh = agent.usable_capacity_kwh * (min_reserve + comfort_frac)
 
     # Find all stations along the route (by node index)
@@ -160,8 +166,7 @@ def _plan_charging_stops(
             arriving_soc = soc - energy_needed
 
             if waypoint_idx == destination_idx:
-                # Destination only needs hard reserve
-                if arriving_soc >= reserve_kwh:
+                if arriving_soc >= dest_reserve_kwh:
                     best_idx = waypoint_idx
                     break
             else:
@@ -179,7 +184,8 @@ def _plan_charging_stops(
                 energy_needed = compute_segment_energy(
                     segment, network, agent.consumption_kwh_per_km
                 )
-                if soc - energy_needed >= reserve_kwh:
+                threshold = dest_reserve_kwh if waypoint_idx == destination_idx else reserve_kwh
+                if soc - energy_needed >= threshold:
                     best_idx = waypoint_idx
                     break
 
