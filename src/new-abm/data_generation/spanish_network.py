@@ -561,10 +561,12 @@ def _cluster_chargers_on_road(
 
     import math
     n_stations = len(road_ch)
-    if n_stations <= cluster_stations_per_group:
-        n_clusters = n_stations
-    else:
-        n_clusters = math.ceil(n_stations / cluster_stations_per_group)
+    # Floor of 16 preserves the previous resolution on small/medium roads while
+    # scaling clusters up on heavy corridors (e.g. A-7 with 772 stations → 78).
+    n_clusters = min(
+        n_stations,
+        max(16, math.ceil(n_stations / cluster_stations_per_group)),
+    )
 
     # Assign cluster label by equal-size quantile split
     road_ch["_cluster"] = (
