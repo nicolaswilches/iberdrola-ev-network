@@ -53,6 +53,9 @@ data/raw/dgt_registrations/**/vehiculos/
 # output/*.csv — these are deliverables
 # visualization/*.html — deliverable
 
+# Feedback loop runtime backups
+data/processed/proposed_stations.backup.csv
+
 # IDE
 .idea/
 .vscode/
