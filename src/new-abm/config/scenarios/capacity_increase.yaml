@@ -1,6 +1,8 @@
-# Scenario: double connectors at the busiest station (Zaragoza East)
+# Scenario: add 4 connectors at the single worst bottleneck station.
+# Used for cost-benefit comparison against expand_hubs (which touches many
+# stations) and price_reduction (which does not add any hardware).
 name: capacity_increase
-description: "Add 4 extra connectors at Zaragoza East (typically the most congested)."
+description: "Add 4 connectors at the single busiest bottleneck station (EC_AP-46_001, peak queue 795 in baseline)."
 modifications:
   station_connector_delta:
-    STA_ZAR_E: 4
+    EC_AP-46_001: 4

@@ -219,6 +219,64 @@ class RoadNetwork:
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return float("inf")
 
+    def k_shortest_paths_gc(
+        self,
+        origin: str,
+        destination: str,
+        vot_eur_per_hour: float,
+        max_comfortable_speed_kmh: Optional[float] = None,
+        k: int = 5,
+    ) -> List[List[str]]:
+        """
+        Return up to k simple paths ordered by generalized cost.
+
+        Used by the charging-aware routing fallback: when the GC-shortest path
+        has no feasible charging plan (e.g. the autopista with few chargers),
+        the planner walks down this list and returns the first route that can
+        be completed with the agent's battery.
+
+        Networkx's shortest_simple_paths requires a scalar edge-attribute
+        weight, so we temporarily stamp each edge with a GC value computed
+        for this agent, run the enumeration, then remove the attribute.
+        """
+        if vot_eur_per_hour <= 0:
+            try:
+                paths = nx.shortest_simple_paths(
+                    self.graph, origin, destination, weight="travel_time_min"
+                )
+                return [p for _, p in zip(range(k), paths)]
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                return []
+
+        vot_per_min = vot_eur_per_hour / 60.0
+        attr = "_gc_tmp"
+
+        try:
+            # Stamp GC on every edge for this agent.
+            for u, v, d in self.graph.edges(data=True):
+                if max_comfortable_speed_kmh is not None:
+                    road_speed = d.get("speed_limit_kmh", 120.0)
+                    eff_speed = min(road_speed, max_comfortable_speed_kmh)
+                    dist = d.get("distance_km", 0.0)
+                    travel_time = (
+                        (dist / eff_speed * 60.0) if eff_speed > 0 else float("inf")
+                    )
+                else:
+                    travel_time = d.get("travel_time_min", 0.0)
+                d[attr] = travel_time + d.get("toll_eur", 0.0) / vot_per_min
+
+            try:
+                paths = nx.shortest_simple_paths(
+                    self.graph, origin, destination, weight=attr
+                )
+                return [p for _, p in zip(range(k), paths)]
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                return []
+        finally:
+            # Always remove the temporary attribute, even on error.
+            for _u, _v, d in self.graph.edges(data=True):
+                d.pop(attr, None)
+
     # ------------------------------------------------------------------
     # Segment / path queries
     # ------------------------------------------------------------------

@@ -171,6 +171,91 @@ def test_plan_route_no_stops_when_soc_sufficient():
     assert len(route) == 3
 
 
+def test_plan_route_no_dest_charger_forces_stop():
+    """Agent without a destination charger must arrive with ~50% SOC and will
+    stop en route even when the trip is completable with the 10% hard reserve."""
+    net = make_corridor_network()
+    # SOC sized so the agent could JUST reach C with 10% reserve but NOT with 50%.
+    # Trip cost = 40 kWh. Usable = 67.5 kWh. 10% reserve = 6.75 kWh, so 46.75 kWh
+    # SOC would arrive at 6.75 (enough with dest charger). 50% reserve = 33.75 kWh,
+    # so 46.75 kWh SOC would fall short by 27 kWh → must stop to charge.
+    agent = make_agent(battery=75.0, soc=46.75)
+    agent.destination_charging_access = False
+    stations_by_node = {"B": [make_station()]}
+    config = {
+        **BASE_CONFIG,
+        "no_dest_charger_arrival_soc_fraction": 0.50,
+    }
+    route, stops = plan_route_with_stops(agent, net, stations_by_node, config)
+    assert len(stops) == 1, "Agent without dest charger should stop at B"
+    assert stops[0].node_id == "B"
+
+
+def test_plan_route_with_dest_charger_skips_stop():
+    """Same SOC, but agent HAS a destination charger. The 10% reserve path lets
+    them reach C without stopping."""
+    net = make_corridor_network()
+    agent = make_agent(battery=75.0, soc=46.75)
+    agent.destination_charging_access = True
+    stations_by_node = {"B": [make_station()]}
+    config = {
+        **BASE_CONFIG,
+        "no_dest_charger_arrival_soc_fraction": 0.50,
+    }
+    route, stops = plan_route_with_stops(agent, net, stations_by_node, config)
+    assert len(stops) == 0, "Agent with dest charger should not need to stop"
+
+
+def test_plan_route_falls_back_when_fast_road_has_no_station():
+    """Two parallel routes A->C: FAST (no station) and SLOW (station at mid).
+    Agent cannot complete the fast route without charging, so the planner
+    must fall back to the slow route's station plan."""
+    net = RoadNetwork()
+    for nid in ["A", "F_MID", "S_MID", "C"]:
+        net.add_node(RoadNode(nid, nid, 40.0, -3.0, "city", 10000))
+
+    # Fast path A -> F_MID -> C at 140 km/h via AP, 200 km total.
+    net.add_undirected_road(
+        RoadEdge("FAST1", "A", "F_MID", 100.0, 100.0 / 140.0 * 60.0, "AP",
+                 speed_limit_kmh=140.0)
+    )
+    net.add_undirected_road(
+        RoadEdge("FAST2", "F_MID", "C", 100.0, 100.0 / 140.0 * 60.0, "AP",
+                 speed_limit_kmh=140.0)
+    )
+    # Slow path A -> S_MID -> C at 100 km/h via A, 200 km total.
+    net.add_undirected_road(
+        RoadEdge("SLOW1", "A", "S_MID", 100.0, 60.0, "A",
+                 speed_limit_kmh=100.0)
+    )
+    net.add_undirected_road(
+        RoadEdge("SLOW2", "S_MID", "C", 100.0, 60.0, "A",
+                 speed_limit_kmh=100.0)
+    )
+
+    # Station only on the slow path (S_MID).
+    stations_by_node = {"S_MID": [make_station(node_id="S_MID")]}
+
+    # Agent battery sized so the full 200 km trip needs a charge stop.
+    # 200 km * 0.20 = 40 kWh required. SOC = 30 kWh, usable = 67.5, reserve = 6.75.
+    # At start agent needs 40 kWh but has only 30, so a stop is mandatory.
+    agent = make_agent(battery=75.0, soc=30.0)
+
+    config = {
+        **BASE_CONFIG,
+        "route_candidates_k": 5,
+    }
+    route, stops = plan_route_with_stops(agent, net, stations_by_node, config)
+
+    assert route, "Routing should return a feasible route"
+    assert "S_MID" in route, (
+        "Planner must pick the slower route that passes the station at S_MID, "
+        f"got route={route}"
+    )
+    assert len(stops) == 1
+    assert stops[0].node_id == "S_MID"
+
+
 def test_build_waypoints_with_stop():
     station = make_station()
     route = ["A", "B", "C"]

@@ -53,6 +53,9 @@ class TripRecord:
     initial_soc_kwh: float
     final_soc_kwh: float
     generalized_cost_eur: float = 0.0
+    # Empty for completed trips. For failed trips, one of:
+    # no_path_found | no_reachable_station | soc_depleted | sim_window_timeout
+    failure_reason: str = ""
 
 
 class ResultsCollector:
@@ -121,6 +124,7 @@ class ResultsCollector:
         route_node_count: int,
         final_soc_kwh: float,
         generalized_cost_eur: float = 0.0,
+        failure_reason: str = "",
     ) -> None:
         """Called when an agent completes or fails its trip."""
         initial_soc = self._initial_soc_by_agent.get(agent_id, 0.0)
@@ -141,6 +145,7 @@ class ResultsCollector:
                 initial_soc_kwh=initial_soc,
                 final_soc_kwh=final_soc_kwh,
                 generalized_cost_eur=generalized_cost_eur,
+                failure_reason=failure_reason,
             )
         )
 

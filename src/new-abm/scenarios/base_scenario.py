@@ -104,6 +104,28 @@ def apply_scenario(
     # (SimPy generators cannot be pickled/deepcopied).
     stations = [_copy_station(s) for s in base_stations]
     config = copy.deepcopy(base_config)
+    station_ids = {s.station_id for s in stations}
+
+    # Warn loudly if the scenario references station IDs that do not exist in
+    # the network; otherwise the scenario silently no-ops for that entry.
+    for sid in scenario.station_price_multipliers:
+        if sid not in station_ids:
+            logger.warning(
+                "Scenario '%s': station_price_multiplier references unknown station_id '%s'",
+                scenario.name, sid,
+            )
+    for sid in scenario.station_connector_deltas:
+        if sid not in station_ids:
+            logger.warning(
+                "Scenario '%s': station_connector_delta references unknown station_id '%s'",
+                scenario.name, sid,
+            )
+    for sid in scenario.station_reliability_overrides:
+        if sid not in station_ids:
+            logger.warning(
+                "Scenario '%s': station_reliability_override references unknown station_id '%s'",
+                scenario.name, sid,
+            )
 
     # --- Apply station modifications ---
     for station in stations:

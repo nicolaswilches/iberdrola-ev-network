@@ -37,7 +37,7 @@ from data_generation.synthetic import build_spain_demo_network
 from outputs.aggregator import compare_scenarios
 from outputs.visualizer import save_all_plots
 from scenarios.base_scenario import ScenarioConfig, load_scenario_from_yaml
-from scenarios.runner import ScenarioRunner, make_demo_scenarios
+from scenarios.runner import ScenarioRunner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -131,15 +131,23 @@ def main():
     # ------------------------------------------------------------------
     # Run scenarios
     # ------------------------------------------------------------------
-    # Load scenario configs: summer peak + expand hubs + original demos
+    # All scenario configs live as YAML under config/scenarios/.
+    # Baseline is the file-less case handled separately by ScenarioRunner.
     scenario_dir = Path(__file__).parent / "config" / "scenarios"
-    custom_scenarios = []
-    for sc_name in ["summer_peak", "expand_hubs"]:
+    scenario_names = [
+        "summer_peak",
+        "expand_hubs",
+        "price_reduction",
+        "capacity_increase",
+        "high_home_charging",
+    ]
+    all_scenarios = []
+    for sc_name in scenario_names:
         sc_path = scenario_dir / f"{sc_name}.yaml"
         if sc_path.exists():
-            custom_scenarios.append(load_scenario_from_yaml(str(sc_path)))
-
-    all_scenarios = custom_scenarios + make_demo_scenarios()
+            all_scenarios.append(load_scenario_from_yaml(str(sc_path)))
+        else:
+            logger.warning("Scenario YAML not found: %s", sc_path)
     print(f"\n[3/4] Running {1 + len(all_scenarios)} scenarios (baseline + {len(all_scenarios)} modifications)...")
     sc_runner = ScenarioRunner(network, stations, config, trips)
     for sc in all_scenarios:

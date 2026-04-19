@@ -88,17 +88,23 @@ class ChargingStation:
 
     def expected_wait_time_min(self, avg_session_min: float = 22.0) -> float:
         """
-        Rough expected wait time (M/D/c approximation) for a new arrival.
+        Approximate M/D/c expected wait for a new arrival.
 
-        Uses the simple formula: E[W] ≈ queue_length * avg_session / c
-        where c = num_connectors.  Good enough for agent decision-making.
+        E[W] ~= queue_length / c * S  +  S / (c + 1)
+          - queue_length / c * S: time for queue_length agents to be served
+            by c parallel connectors at deterministic service S.
+          - S / (c + 1): residual service time until the first of the c busy
+            connectors frees up (expected minimum of c uniform residuals).
+
+        Returns 0 if there is a free connector right now.
         """
-        queue = self.current_queue_length()
-        if queue == 0 and not self.is_full():
+        if not self.is_full():
             return 0.0
-        # Agents in queue plus partially-served fraction of busy connectors
-        effective_load = queue + self.current_users()
-        return (effective_load / max(1, self.num_connectors)) * avg_session_min
+        c = max(1, self.num_connectors)
+        queue = self.current_queue_length()
+        queue_wait = (queue / c) * avg_session_min
+        residual_wait = avg_session_min / (c + 1)
+        return queue_wait + residual_wait
 
     def record_session(
         self,

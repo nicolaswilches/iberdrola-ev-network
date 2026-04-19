@@ -88,10 +88,15 @@ def _get_spacing_threshold(row) -> float:
     """Return the applicable AFIR spacing threshold (km) for a road segment row."""
     tent_tier = str(row.get('tent_tier', '')).lower()
     is_tent = bool(row.get('is_tent', False))
-    if tent_tier == 'core' or (is_tent and tent_tier not in ('comprehensive', 'none', '')):
+    if tent_tier == 'core':
         return MAX_STATION_SPACING_TENT_CORE_KM    # 60 km
     if tent_tier == 'comprehensive':
         return MAX_STATION_SPACING_TENT_COMP_KM    # 100 km
+    # If is_tent is True but tent_tier is missing or unrecognised, default to
+    # the stricter Core threshold. AFIR requires a tier for every TEN-T
+    # segment, so a blank tier is data drift rather than a legitimate case.
+    if is_tent:
+        return MAX_STATION_SPACING_TENT_CORE_KM    # 60 km
     return MAX_STATION_SPACING_KM                  # 120 km
 
 

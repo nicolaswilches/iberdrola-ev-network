@@ -140,6 +140,10 @@ _ROAD_CORRIDORS: List[Tuple[str, List[str]]] = [
     ("A-45",  ["COR", "MAL"]),
     ("A-92",  ["SEV", "GRN", "MUR"]),
     ("N-340", ["ALI", "MAL"]),
+    # Parallel autopistas kept distinct from their autovia counterparts
+    ("AP-8",  ["BIL", "SSB"]),       # parallels A-8 Bilbao to San Sebastian
+    ("AP-6",  ["MAD", "VLD"]),       # parallels A-6 Madrid to Valladolid
+    ("AP-15", ["PMP", "ZAR"]),       # Navarra autopista, joins AP-68 at Tudela
 ]
 
 # ---------------------------------------------------------------------------
@@ -231,7 +235,10 @@ _TOLL_EUR_PER_KM: Dict[str, float] = {
     "AP-68": 0.040,   # Bilbao–Zaragoza (Euskal Errepideak / Itinere)
     "AP-9":  0.025,   # Galicia ring roads (Autopistas do Atlántico)
     "AP-46": 0.050,   # Málaga–Granada short section (Aucosta)
-    # AP-1 (expired 2018) and AP-4 (never tolled) are intentionally absent → 0.
+    "AP-8":  0.030,   # Vizcaya section still tolled in 2027
+    "AP-15": 0.040,   # Navarra autopista (Audenasa)
+    # AP-1 (expired 2018), AP-4 (never tolled), AP-6 (expired 2019) are
+    # intentionally absent → 0.
 }
 
 # Default price per kWh for existing stations (EUR) — NAP data lacks prices
@@ -526,9 +533,18 @@ def _build_corridors_and_stations(
 # ---------------------------------------------------------------------------
 
 def _normalise_road(name: str) -> str:
-    """Normalise road name for fuzzy matching: strip directional suffixes, AP->A."""
+    """
+    Normalise road name for fuzzy matching.
+
+    AP-X and A-X are different physical roads (parallel autopista vs autovia),
+    so they are NOT collapsed. Only directional suffixes are stripped:
+      - Cardinal markers N/S/E/W on shared routes (e.g. A-7S -> A-7).
+      - AP-9 sub-variants: the F (fork) and V (variant) suffixes on AP-9
+        refer to sections of the same autopista (e.g. AP-9F -> AP-9).
+    """
     name = name.strip().rstrip("NSEWnsew")
-    name = re.sub(r'^AP-', 'A-', name)
+    # AP-9 has known F and V sub-routes that belong to the same corridor.
+    name = re.sub(r'^(AP-9)[FVfv]$', r'\1', name)
     return name
 
 
@@ -810,6 +826,10 @@ def _get_segment_km(n1: str, n2: str, network: RoadNetwork) -> float:
             node1.latitude, node1.longitude,
             node2.latitude, node2.longitude,
         ) * 1.15
+    logger.warning(
+        "_get_segment_km: neither node %s nor %s in network; using 100 km default.",
+        n1, n2,
+    )
     return 100.0  # last-resort fallback
 
 
@@ -835,7 +855,14 @@ def _project_onto_polyline(
         nid_a = city_chain[i]
         nid_b = city_chain[i + 1]
         if nid_a not in network.nodes or nid_b not in network.nodes:
-            seg_km = _SEGMENT_KM.get((nid_a, nid_b), 100.0)
+            seg_km = _SEGMENT_KM.get((nid_a, nid_b))
+            if seg_km is None:
+                logger.warning(
+                    "_project_onto_polyline: missing network nodes and no "
+                    "_SEGMENT_KM entry for (%s, %s); using 100 km default.",
+                    nid_a, nid_b,
+                )
+                seg_km = 100.0
             cumulative_km += seg_km
             continue
 

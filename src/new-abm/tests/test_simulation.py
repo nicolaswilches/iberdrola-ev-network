@@ -18,7 +18,9 @@ from models.demand import ODMatrix, ODPair
 from models.network import RoadEdge, RoadNetwork, RoadNode
 from models.station import ChargingStation
 from simulation.runner import SimulationRunner
+from simulation.engine import _can_abandon_safely
 from scenarios.base_scenario import ScenarioConfig, apply_scenario
+from models.agent import VehicleAgent
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +118,92 @@ BASE_CONFIG = {
 }
 
 NUM_AGENTS = 30  # Keep small for fast tests
+
+
+# ---------------------------------------------------------------------------
+# Queue abandonment safety constraint
+# ---------------------------------------------------------------------------
+
+def _make_abandon_agent(soc_kwh: float, capacity_kwh: float = 67.5) -> VehicleAgent:
+    a = VehicleAgent(
+        agent_id="A1",
+        origin="A",
+        destination="D",
+        departure_time_min=0.0,
+        battery_capacity_kwh=75.0,
+        usable_capacity_kwh=capacity_kwh,
+        consumption_kwh_per_km=0.20,
+    )
+    a.current_soc_kwh = soc_kwh
+    return a
+
+
+def test_can_abandon_safely_yes_when_alternative_in_range():
+    """Agent at B with plenty of SOC: station C is reachable, abandonment OK."""
+    net = make_test_network()
+    stations = make_test_stations()
+    stations_by_node = {s.node_id: [s] for s in stations}
+    agent = _make_abandon_agent(soc_kwh=60.0)  # plenty of charge
+    remaining_route = ["B", "C", "D"]  # B-C is 150 km = 30 kWh
+    flat_cfg = {"min_reserve_soc_fraction": 0.10}
+    assert _can_abandon_safely(
+        agent, stations[0], remaining_route, stations_by_node, net, flat_cfg
+    ) is True
+
+
+def test_can_abandon_safely_no_when_alternative_out_of_range():
+    """Agent at B with low SOC: cannot reach C without going below reserve.
+    Must commit (Nicolas's constraint)."""
+    net = make_test_network()
+    stations = make_test_stations()
+    stations_by_node = {s.node_id: [s] for s in stations}
+    # B->C costs 30 kWh. Reserve = 6.75 kWh. SOC needs to be >= 36.75 to abandon.
+    agent = _make_abandon_agent(soc_kwh=20.0)
+    remaining_route = ["B", "C", "D"]
+    flat_cfg = {"min_reserve_soc_fraction": 0.10}
+    assert _can_abandon_safely(
+        agent, stations[0], remaining_route, stations_by_node, net, flat_cfg
+    ) is False
+
+
+def test_can_abandon_safely_yes_when_same_node_alternative():
+    """Agent at B has low SOC but a SECOND station exists at B itself.
+    Abandonment is safe even when no forward station is reachable."""
+    net = make_test_network()
+    primary = ChargingStation(
+        station_id="STA_B1", node_id="B", name="B1", latitude=40.5,
+        longitude=-4.0, max_power_kw=150.0, num_connectors=4,
+        price_per_kwh=0.40, reliability=0.95,
+    )
+    backup = ChargingStation(
+        station_id="STA_B2", node_id="B", name="B2", latitude=40.5,
+        longitude=-4.0, max_power_kw=150.0, num_connectors=2,
+        price_per_kwh=0.40, reliability=0.95,
+    )
+    stations_by_node = {"B": [primary, backup]}
+    agent = _make_abandon_agent(soc_kwh=10.0)  # critically low
+    remaining_route = ["B", "C", "D"]
+    flat_cfg = {"min_reserve_soc_fraction": 0.10}
+    assert _can_abandon_safely(
+        agent, primary, remaining_route, stations_by_node, net, flat_cfg
+    ) is True
+
+
+def test_can_abandon_safely_no_when_no_other_station_exists():
+    """Agent's only stop has no alternative in the network. Must commit."""
+    net = make_test_network()
+    only_station = ChargingStation(
+        station_id="STA_B", node_id="B", name="B", latitude=40.5,
+        longitude=-4.0, max_power_kw=150.0, num_connectors=4,
+        price_per_kwh=0.40, reliability=0.95,
+    )
+    stations_by_node = {"B": [only_station]}  # no station at C or D
+    agent = _make_abandon_agent(soc_kwh=60.0)  # plenty, but nowhere to go
+    remaining_route = ["B", "C", "D"]
+    flat_cfg = {"min_reserve_soc_fraction": 0.10}
+    assert _can_abandon_safely(
+        agent, only_station, remaining_route, stations_by_node, net, flat_cfg
+    ) is False
 
 
 # ---------------------------------------------------------------------------

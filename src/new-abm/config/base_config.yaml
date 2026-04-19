@@ -27,7 +27,8 @@ behavior:
   emergency_soc_fraction: 0.15 # Trigger emergency charge search below this
   target_soc_on_arrival: 0.30 # Desired SOC at destination
   min_charge_gain_fraction: 0.30 # Don't stop to charge less than 30% battery
-  max_queue_wait_tolerance_min: 30.0 # Maximum acceptable wait time (base case)
+  max_queue_wait_tolerance_min: 30.0 # Skip station before queueing if expected wait exceeds this
+  max_queue_wait_min: 60.0 # Once queued, abandon if actual wait exceeds this (only if a reachable alternative exists)
   default_value_of_time_eur_per_hour: 28.0
   default_price_sensitivity: 1.0
   default_queue_aversion: 1.0

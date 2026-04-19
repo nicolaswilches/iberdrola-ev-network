@@ -79,24 +79,109 @@ def plan_route_with_stops(
     high-VoT agents prefer fast AP- toll motorways while budget-conscious
     agents take the slower parallel free A-/N- roads.
 
+    A driver's app does not just pick the fastest road; it picks the fastest
+    road where charging is feasible. To mirror that, this function enumerates
+    the top-K routes by generalized cost and returns the first one whose
+    charging plan is feasible. If none are feasible, it falls back to the
+    primary (GC-shortest) route with its partial plan and lets the simulation
+    surface the strand.
+
     Returns
     -------
     route:          full node list from origin to destination
     charging_stops: ordered list of ChargingStation objects the agent
                     plans to use (may be empty for short trips)
     """
-    route = network.shortest_path_gc(agent.origin, agent.destination,
-                                     agent.value_of_time_eur_per_hour,
-                                     agent.max_comfortable_speed_kmh)
-    if not route:
+    k = int(config.get("route_candidates_k", 5))
+    candidates = network.k_shortest_paths_gc(
+        agent.origin,
+        agent.destination,
+        agent.value_of_time_eur_per_hour,
+        agent.max_comfortable_speed_kmh,
+        k=k,
+    )
+    if not candidates:
         logger.warning(
-            "Agent %s: no path found %s → %s",
+            "Agent %s: no path found %s -> %s",
             agent.agent_id, agent.origin, agent.destination,
         )
         return [], []
 
-    charging_stops = _plan_charging_stops(agent, route, network, stations_by_node, config)
-    return route, charging_stops
+    primary_route = candidates[0]
+    primary_stops: List[ChargingStation] = []
+
+    for i, route in enumerate(candidates):
+        stops = _plan_charging_stops(
+            agent, route, network, stations_by_node, config
+        )
+        if _is_stop_plan_feasible(agent, route, stops, network, config):
+            if i > 0:
+                logger.debug(
+                    "Agent %s: primary route infeasible, using candidate %d of %d.",
+                    agent.agent_id, i + 1, len(candidates),
+                )
+            return route, stops
+        if i == 0:
+            primary_stops = stops
+
+    # All candidates infeasible. Return the primary plan and let the engine
+    # surface the strand with a clear failure_reason.
+    logger.warning(
+        "Agent %s: no feasible route among %d candidates, returning primary.",
+        agent.agent_id, len(candidates),
+    )
+    return primary_route, primary_stops
+
+
+def _is_stop_plan_feasible(
+    agent: VehicleAgent,
+    route: List[str],
+    stops: List[ChargingStation],
+    network: RoadNetwork,
+    config: Dict,
+) -> bool:
+    """Walk the route against the stop plan and verify SOC stays viable."""
+    if len(route) < 2:
+        return True
+
+    reserve_frac = config.get("min_reserve_soc_fraction", 0.10)
+    reserve_kwh = agent.usable_capacity_kwh * reserve_frac
+    no_dest_frac = config.get("no_dest_charger_arrival_soc_fraction", 0.50)
+    dest_reserve_kwh = (
+        agent.usable_capacity_kwh * no_dest_frac
+        if not agent.destination_charging_access
+        else reserve_kwh
+    )
+
+    # Index of every planned stop in the route (by first matching node_id).
+    stop_node_ids = {s.node_id for s in stops}
+    stop_idx_list: List[int] = [
+        i for i, n in enumerate(route) if n in stop_node_ids
+    ]
+
+    soc = agent.current_soc_kwh
+    prev = 0
+    checkpoints = stop_idx_list + [len(route) - 1]
+
+    for cp in checkpoints:
+        if cp <= prev:
+            continue
+        segment = route[prev: cp + 1]
+        energy = compute_segment_energy(
+            segment, network, agent.consumption_kwh_per_km
+        )
+        arriving = soc - energy
+        threshold = dest_reserve_kwh if cp == len(route) - 1 else reserve_kwh
+        if arriving < threshold:
+            return False
+        # Simulate charging at an intermediate stop to 80%.
+        if cp != len(route) - 1:
+            target_soc = agent.usable_capacity_kwh * 0.80
+            soc = max(arriving, min(target_soc, agent.usable_capacity_kwh))
+        else:
+            soc = arriving
+        prev = cp
+    return True
 
 
 def _plan_charging_stops(

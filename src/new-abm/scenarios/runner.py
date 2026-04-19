@@ -171,34 +171,7 @@ class ScenarioRunner:
         logger.info("Outputs saved to %s/", output_dir)
 
 
-# ---------------------------------------------------------------------------
-# Convenience: build the three standard demo scenarios
-# ---------------------------------------------------------------------------
-
-def make_demo_scenarios() -> List[ScenarioConfig]:
-    """Return the three standard scenario experiments."""
-    price_reduction = ScenarioConfig(
-        name="price_reduction",
-        description="40% price cut on Madrid-Barcelona corridor stations.",
-        station_price_multipliers={
-            "STA_MAD_N": 0.60,
-            "STA_ZAR_E": 0.60,
-            "STA_ZAR_W": 0.60,
-            "STA_LLE_E": 0.60,
-            "STA_BCN_S": 0.60,
-        },
-    )
-
-    capacity_increase = ScenarioConfig(
-        name="capacity_increase",
-        description="Add 4 connectors at Zaragoza East (most congested station).",
-        station_connector_deltas={"STA_ZAR_E": 4},
-    )
-
-    high_home_charging = ScenarioConfig(
-        name="high_home_charging",
-        description="Home charging penetration rises from 70% to 95%.",
-        home_charging_penetration=0.95,
-    )
-
-    return [price_reduction, capacity_increase, high_home_charging]
+# Scenarios are defined exclusively as YAML under config/scenarios/ and loaded
+# via load_scenario_from_yaml(). The old make_demo_scenarios() helper was
+# removed because it hardcoded synthetic-network station IDs that silently
+# no-opped against the real pipeline.

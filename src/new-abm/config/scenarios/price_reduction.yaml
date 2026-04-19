@@ -1,7 +1,23 @@
-# Scenario: 40% price reduction at stations on the Madrid-Barcelona corridor
+# Scenario: 40% price reduction on the Madrid to Barcelona corridor.
+# Covers the top-traffic A-2 stations and the AP-2 autopista stations, plus
+# STA_0003 (our proposed A-23 / AP-2 interface station). Used for cost-benefit
+# analysis against capacity_increase and expand_hubs.
 name: price_reduction
-description: "Reduce charging price by 40% on the Madrid-Barcelona corridor."
+description: "Cut charging price by 40% on Madrid to Barcelona corridor stations (A-2 and AP-2)."
 modifications:
   station_price_multiplier:
-    corridor_stations: ["STA_MAD_N", "STA_ZAR_E", "STA_ZAR_W", "STA_BCN_S"]
+    corridor_stations:
+      - EC_A-2_021
+      - EC_A-2_022
+      - EC_A-2_023
+      - EC_A-2_026
+      - EC_A-2_027
+      - EC_A-2_028
+      - EC_A-2_029
+      - EC_AP-2_001
+      - EC_AP-2_005
+      - EC_AP-2_007
+      - EC_AP-2_008
+      - EC_AP-2_009
+      - STA_0003
     multiplier: 0.60

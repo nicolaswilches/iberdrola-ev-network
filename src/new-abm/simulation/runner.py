@@ -143,6 +143,29 @@ class SimulationRunner:
         # --- Run ---
         env.run(until=sim_duration)
 
+        # --- Record any agents still mid-trip as timed out by the sim window ---
+        for agent in agents:
+            if agent.status in ("completed", "stranded", "failed_no_route"):
+                continue
+            agent.status = "stranded"
+            agent.failure_reason = "sim_window_timeout"
+            collector.record_completion(
+                agent_id=agent.agent_id,
+                origin=agent.origin,
+                destination=agent.destination,
+                departure_time_min=agent.departure_time_min,
+                arrival_time_min=sim_duration,
+                status="stranded",
+                num_charge_stops=len(agent.charge_events),
+                total_wait_min=agent.total_wait_time_min,
+                total_charge_min=agent.total_charge_time_min,
+                total_energy_kwh=agent.total_energy_charged_kwh,
+                total_distance_km=agent.total_distance_km,
+                route_node_count=len(agent.route),
+                final_soc_kwh=agent.current_soc_kwh,
+                failure_reason="sim_window_timeout",
+            )
+
         # --- Collect results ---
         results = collector.to_results(
             stations=self.stations,

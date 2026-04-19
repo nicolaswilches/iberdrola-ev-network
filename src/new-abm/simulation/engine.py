@@ -114,6 +114,7 @@ def vehicle_trip_process(
             total_distance_km=0.0,
             route_node_count=0,
             final_soc_kwh=agent.current_soc_kwh,
+            failure_reason="no_path_found",
         )
         return
 
@@ -141,8 +142,12 @@ def vehicle_trip_process(
                 stations_by_node, config, collector
             )
             if not handled:
-                # Stranded
-                _record_strand(agent, env.now, collector)
+                # Emergency station search failed: no reachable station within
+                # remaining SOC. Agent runs out before the next stop.
+                _record_strand(
+                    agent, env.now, collector,
+                    reason="no_reachable_station",
+                )
                 return
 
         # Drive the segment
@@ -169,10 +174,20 @@ def vehicle_trip_process(
                 config=config,
             )
             if should_charge:
-                yield from _execute_charging(
+                charged = yield from _execute_charging(
                     env, agent, waypoint.station,
                     route, network, stations_by_node, config, collector
                 )
+                # On abandonment, the loop continues and the next segment
+                # check at line ~138 will trigger an emergency charge at a
+                # different station if SOC runs low. No extra retry needed
+                # here because the abandonment guard already verified an
+                # alternative is reachable within current SOC.
+                if charged is False:
+                    logger.debug(
+                        "Agent %s abandoned %s; relying on emergency path.",
+                        agent.agent_id, waypoint.station.station_id,
+                    )
 
         elif not waypoint.is_charging_stop and waypoint.end_node in stations_by_node:
             # Opportunistic top-up at an unplanned node
@@ -237,12 +252,15 @@ def _execute_charging(
     """
     SimPy generator fragment: queue at station, wait for connector, charge.
 
-    Uses Python's ``yield from`` so callers can delegate to this generator.
+    Returns True when charging completes successfully, False when the agent
+    abandons the queue because the wait became intolerable AND another
+    station is still reachable within current SOC minus reserve (Nicolas's
+    safety constraint). Agents that cannot safely reach an alternative stay
+    in the queue indefinitely to avoid being stranded at the roadside.
     """
     arrival_time = env.now
     agent.status = "waiting"
 
-    # Determine target SOC before entering queue (decision made at arrival)
     remaining_route = network.subpath_from_node(full_route, station.node_id)
     remaining_dist = network.subpath_distance_km(remaining_route)
     stations_ahead = sum(
@@ -259,10 +277,42 @@ def _execute_charging(
         station.current_queue_length(), target_soc,
     )
 
-    # --- Request a connector ---
-    with station.resource.request() as req:
-        yield req  # Wait here until a connector is free
+    # --- Queue-abandonment wait cap (scaled by agent queue_aversion) ---
+    base_wait_cap = float(config.get("max_queue_wait_min", 60.0))
+    wait_cap = base_wait_cap / max(0.1, getattr(agent, "queue_aversion", 1.0))
 
+    req = station.resource.request()
+    try:
+        wait_result = yield req | env.timeout(wait_cap)
+    except Exception:
+        req.cancel()
+        raise
+
+    if req not in wait_result:
+        # Wait cap exceeded. Check Nicolas's constraint: can we safely
+        # reach another station with current SOC? If not, commit to waiting.
+        if _can_abandon_safely(
+            agent, station, remaining_route, stations_by_node, network, config
+        ):
+            req.cancel()
+            wait_time = env.now - arrival_time
+            agent.total_wait_time_min += wait_time
+            agent.status = "driving"
+            logger.debug(
+                "[t=%.0f] Agent %s abandoned queue at %s after %.1f min "
+                "(alternative within SOC)",
+                env.now, agent.agent_id, station.station_id, wait_time,
+            )
+            return False
+        # No safe alternative: must keep waiting for this connector.
+        logger.debug(
+            "[t=%.0f] Agent %s hit wait cap at %s but no safe alternative; "
+            "staying in queue.",
+            env.now, agent.agent_id, station.station_id,
+        )
+        yield req
+
+    try:
         wait_time = env.now - arrival_time
         agent.status = "charging"
 
@@ -278,7 +328,7 @@ def _execute_charging(
         if charge_time < 0.5:
             # Nothing meaningful to charge — release connector immediately
             agent.status = "driving"
-            return
+            return True
 
         yield env.timeout(charge_time)
 
@@ -322,6 +372,55 @@ def _execute_charging(
             env.now, agent.agent_id, station.station_id,
             energy_added, wait_time, charge_time,
         )
+        return True
+    finally:
+        station.resource.release(req)
+
+
+# ---------------------------------------------------------------------------
+# Queue abandonment helper
+# ---------------------------------------------------------------------------
+
+def _can_abandon_safely(
+    agent: VehicleAgent,
+    current_station: ChargingStation,
+    remaining_route: List[str],
+    stations_by_node: Dict[str, List[ChargingStation]],
+    network: RoadNetwork,
+    config: Dict,
+) -> bool:
+    """
+    Return True iff the agent could reach a different station with its
+    current SOC above the hard reserve. Prevents agents from abandoning
+    into a strand (Nicolas's constraint).
+    """
+    reserve_frac = float(config.get("min_reserve_soc_fraction", 0.10))
+    reserve_kwh = agent.usable_capacity_kwh * reserve_frac
+
+    # Option 1: a different station at the same node.
+    same_node_alts = [
+        s for s in stations_by_node.get(current_station.node_id, [])
+        if s.station_id != current_station.station_id
+    ]
+    if same_node_alts:
+        return True
+
+    # Option 2: walk forward along the remaining route until we find the
+    # next node with a station we can reach within the reserve.
+    cumulative_energy = 0.0
+    for i in range(len(remaining_route) - 1):
+        edge_energy = compute_segment_energy(
+            [remaining_route[i], remaining_route[i + 1]],
+            network,
+            agent.consumption_kwh_per_km,
+        )
+        cumulative_energy += edge_energy
+        if agent.current_soc_kwh - cumulative_energy < reserve_kwh:
+            return False  # Cannot reach this far, no safe alternative
+        next_node = remaining_route[i + 1]
+        if next_node in stations_by_node and next_node != current_station.node_id:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +452,6 @@ def _handle_emergency_charge(
             env.now, agent.agent_id, agent.current_node, agent.current_soc_kwh,
         )
         return
-        yield  # make this a generator
 
     # Drive to emergency station
     path_to_station = network.subpath_up_to_node(segment_nodes, station.node_id)
@@ -372,16 +470,17 @@ def _handle_emergency_charge(
         segment_nodes, network, stations_by_node, config, collector
     )
     return True
-    yield  # ensure generator
 
 
 def _record_strand(
     agent: VehicleAgent,
     sim_time: float,
     collector: ResultsCollector,
+    reason: str = "soc_depleted",
 ) -> None:
     agent.status = "stranded"
     agent.end_time_min = sim_time
+    agent.failure_reason = reason
     collector.record_completion(
         agent_id=agent.agent_id,
         origin=agent.origin,
@@ -396,4 +495,5 @@ def _record_strand(
         total_distance_km=agent.total_distance_km,
         route_node_count=len(agent.route),
         final_soc_kwh=agent.current_soc_kwh,
+        failure_reason=reason,
     )
