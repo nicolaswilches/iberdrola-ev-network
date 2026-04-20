@@ -236,10 +236,19 @@ def _load_ide(filepath=None):
 
 
 def _load_endesa(filepaths=None):
-    """Load Endesa (e-distribución) grid capacity CSVs."""
+    """
+    Load Endesa (e-distribución) grid capacity CSVs.
+
+    The repository currently stores Endesa's published "generación" files. We
+    use their available-capacity field as a documented proxy for local grid
+    headroom, so the default loader explicitly selects those files instead of
+    globbing every top-level CSV in the folder.
+    """
     if filepaths is None:
         base = DATA_RAW / 'grid_capacity' / 'endesa'
-        filepaths = list(base.glob('*.csv'))
+        filepaths = sorted(base.glob('*gener*.csv'))
+        if not filepaths:
+            filepaths = sorted(base.glob('*.csv'))
     frames = []
     for fp in filepaths:
         df = pd.read_csv(fp, sep=';', encoding='utf-8-sig')
