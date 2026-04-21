@@ -56,6 +56,9 @@ from models.station import ChargingStation
 
 logger = logging.getLogger(__name__)
 
+# Name of the roads geometry file produced by NB03 (relative to data/processed/)
+_ROADS_PARQUET_FILENAME = "interurban_roads.parquet"
+
 
 # ---------------------------------------------------------------------------
 # City / hub node definitions — real WGS-84 coordinates
@@ -248,6 +251,117 @@ _PROPOSED_STATION_POWER_KW = 150.0
 
 
 # ---------------------------------------------------------------------------
+# Auto-corridor builder from NB03 road geometry
+# ---------------------------------------------------------------------------
+
+def _build_road_corridors(
+    roads_parquet_path: Path,
+    buffer_km: float = 25.0,
+) -> Dict[str, List[str]]:
+    """
+    Build a complete {road_name: [ordered_city_codes]} mapping.
+
+    Strategy (hybrid):
+      1. Start with all hand-curated corridors from ``_ROAD_CORRIDORS``
+         (manually verified; include terminal city nodes that the interurban
+         geometry cannot capture, e.g. AP-2 ends before Barcelona in the parquet).
+      2. Auto-detect corridors from geometry for every road in the parquet NOT
+         already in the hand-curated list.  For each auto-detected road:
+           a. Merge segment geometries into one line in UTM EPSG:25830.
+           b. Find _CITY_NODES within ``buffer_km`` of the merged line.
+           c. Order retained cities by along-route projection position.
+           d. Keep only roads with ≥2 retained cities (OD signal required).
+      3. Return the merged mapping (hand-curated ∪ auto-detected).
+
+    Uses a 25 km buffer because regional roads often pass within 10-25 km of
+    the nearest city node without entering the urban core.  Terminal cities of
+    major motorways are preserved via the hand-curated fallback.
+
+    Returns an empty dict (triggering static-list fallback in the caller) if
+    geopandas is unavailable or the parquet file is missing.
+    """
+    try:
+        import geopandas as gpd
+        from shapely.ops import linemerge, unary_union
+        from shapely.geometry import Point
+    except ImportError:
+        logger.warning(
+            "geopandas not available — falling back to static _ROAD_CORRIDORS"
+        )
+        return {}
+
+    if not roads_parquet_path.exists():
+        logger.warning(
+            "Roads parquet not found at %s — falling back to static _ROAD_CORRIDORS",
+            roads_parquet_path,
+        )
+        return {}
+
+    # Seed with hand-curated corridors (always kept verbatim)
+    static_dict: Dict[str, List[str]] = {name: list(cities) for name, cities in _ROAD_CORRIDORS}
+
+    # Load geometry in WGS84, reproject to metric UTM for Spain
+    roads_gdf = gpd.read_parquet(roads_parquet_path).to_crs("EPSG:25830")
+
+    # Convert city nodes to UTM Points
+    city_pts_utm: Dict[str, object] = {}
+    try:
+        city_gdf = gpd.GeoDataFrame(
+            [
+                {"city_id": nid, "geometry": Point(lon, lat)}
+                for nid, _, lat, lon, _, _ in _CITY_NODES
+            ],
+            crs="EPSG:4326",
+        ).to_crs("EPSG:25830")
+        for _, row in city_gdf.iterrows():
+            city_pts_utm[row["city_id"]] = row["geometry"]
+    except Exception as exc:
+        logger.warning("Failed to reproject city nodes: %s — using hand-curated only", exc)
+        return static_dict
+
+    buffer_m = buffer_km * 1000.0
+    auto_detected: Dict[str, List[str]] = {}
+    skipped_curated = 0
+    skipped_no_cities = 0
+
+    for road_name, grp in roads_gdf.groupby("Carretera"):
+        # Preserve hand-curated corridors exactly
+        if road_name in static_dict:
+            skipped_curated += 1
+            continue
+
+        union_geom = unary_union(grp.geometry)
+        # linemerge only accepts collections; a single LineString can be used directly
+        merged = union_geom if union_geom.geom_type == "LineString" else linemerge(union_geom)
+        if merged.is_empty:
+            continue
+
+        nearby: List[Tuple[float, str]] = []  # (along_route_m, city_id)
+        for city_id, city_pt in city_pts_utm.items():
+            if merged.distance(city_pt) <= buffer_m:
+                proj_m = merged.project(city_pt)
+                nearby.append((proj_m, city_id))
+
+        if len(nearby) < 2:
+            skipped_no_cities += 1
+            continue
+
+        nearby.sort(key=lambda x: x[0])
+        auto_detected[road_name] = [city_id for _, city_id in nearby]
+
+    merged_corridors = {**static_dict, **auto_detected}
+
+    logger.info(
+        "Road corridors: %d hand-curated + %d auto-detected = %d total "
+        "(buffer %.1f km; %d parquet roads had <2 city hits)",
+        len(static_dict), len(auto_detected), len(merged_corridors),
+        buffer_km, skipped_no_cities,
+    )
+
+    return merged_corridors
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -287,8 +401,15 @@ def build_spain_real_network(
     data_dir = Path(data_dir)
     segments_df, demand_df, chargers_df, proposed_df = _load_data(data_dir)
 
-    # 1. Road-level aggregate lengths from real data
-    road_lengths = _compute_road_lengths(segments_df)
+    # 1. Road corridors: try geometry-based auto-builder, fall back to static list
+    auto_corridors = _build_road_corridors(
+        data_dir / _ROADS_PARQUET_FILENAME
+    )
+    if auto_corridors:
+        corridors: Dict[str, List[str]] = auto_corridors
+    else:
+        logger.info("Using static _ROAD_CORRIDORS (%d corridors)", len(_ROAD_CORRIDORS))
+        corridors = {name: cities for name, cities in _ROAD_CORRIDORS}
 
     # 2. Build city-only graph (nodes, no edges yet)
     network = _build_city_graph()
@@ -298,12 +419,13 @@ def build_spain_real_network(
         network=network,
         chargers_df=chargers_df,
         proposed_df=proposed_df,
+        corridors=corridors,
         include_proposed=include_proposed_stations,
         cluster_stations_per_group=cluster_stations_per_group,
     )
 
     # 4. OD matrix calibrated to 2027 BEV demand
-    od_matrix = _build_od_matrix(demand_df, network)
+    od_matrix = _build_od_matrix(demand_df, network, corridors)
 
     logger.info(
         "Real network ready: %d nodes, %d directed edges, %d stations, "
@@ -393,11 +515,12 @@ def _build_corridors_and_stations(
     network: RoadNetwork,
     chargers_df: pd.DataFrame,
     proposed_df: pd.DataFrame,
+    corridors: Dict[str, List[str]],
     include_proposed: bool,
     cluster_stations_per_group: int,
 ) -> List[ChargingStation]:
     """
-    For every corridor in ``_ROAD_CORRIDORS``:
+    For every corridor in *corridors*:
       1. Cluster baseline chargers on that road into dynamic-sized groups.
       2. Optionally insert proposed stations as waypoints.
       3. Add all waypoint nodes to *network*.
@@ -413,7 +536,7 @@ def _build_corridors_and_stations(
     # Track which undirected edges have already been added to avoid duplicates
     added_edges: set = set()
 
-    for road_name, city_chain in _ROAD_CORRIDORS:
+    for road_name, city_chain in corridors.items():
         # --- verify all cities exist ---
         city_chain = [c for c in city_chain if c in network.nodes]
         if len(city_chain) < 2:
@@ -677,21 +800,23 @@ def _get_proposed_on_road(
 def _build_od_matrix(
     demand_df: pd.DataFrame,
     network: RoadNetwork,
+    corridors: Dict[str, List[str]],
 ) -> ODMatrix:
     """
     Build an ODMatrix calibrated to 2027 BEV demand from
     ``demand_per_segment.csv``.
 
-    For each road in *demand_df*, daily BEV flow is summed and mapped to
-    the (origin_city, destination_city) pair defined in ``_ROAD_CORRIDORS``.
+    For each road in *demand_df*, daily BEV flow is mapped to the
+    (origin_city, destination_city) pair from *corridors*.
     Both directions are added (roads are bidirectional).
 
-    Roads with no matching corridor entry, or whose endpoint cities are not
-    in the network, are skipped and their demand is logged at DEBUG level.
+    Roads with no matching corridor entry are NOT redistributed — their
+    demand is dropped and the unmapped fraction is logged.  If that fraction
+    exceeds 10% a WARNING is emitted so the caller can diagnose coverage gaps.
     """
     # corridor lookup: road_name -> (origin, dest)
     corridor_lookup: Dict[str, Tuple[str, str]] = {}
-    for road_name, nodes in _ROAD_CORRIDORS:
+    for road_name, nodes in corridors.items():
         valid = [n for n in nodes if n in network.nodes]
         if len(valid) >= 2:
             corridor_lookup[road_name] = (valid[0], valid[-1])
@@ -723,11 +848,13 @@ def _build_od_matrix(
 
     od = ODMatrix()
     unmatched_flow = 0.0
+    matched_flow = 0.0
     matched_roads = 0
 
     for road_name, total_flow in road_demand.items():
         if road_name not in corridor_lookup:
             unmatched_flow += total_flow
+            logger.debug("Unmapped road %s: %.0f daily BEV trips dropped", road_name, total_flow)
             continue
         origin, dest = corridor_lookup[road_name]
         purpose = _infer_purpose(road_name)
@@ -743,12 +870,21 @@ def _build_od_matrix(
             daily_bev_trips=float(total_flow),
             purpose=purpose,
         ))
+        matched_flow += total_flow
         matched_roads += 1
 
+    total_csv_flow = matched_flow + unmatched_flow
+    unmapped_pct = (unmatched_flow / total_csv_flow * 100.0) if total_csv_flow > 0 else 0.0
+    log_fn = logger.warning if unmapped_pct > 10.0 else logger.info
+    log_fn(
+        "OD demand coverage: %.0f mapped / %.0f total daily BEV trips "
+        "(%.1f%% unmapped across %d roads without corridor entry)",
+        matched_flow, total_csv_flow, unmapped_pct,
+        len(road_demand) - matched_roads,
+    )
     logger.info(
-        "OD matrix: %d roads matched, %d pairs, %.0f total daily BEV trips "
-        "(%.0f trips on unmatched roads skipped)",
-        matched_roads, len(od.pairs), od.total_daily_trips(), unmatched_flow,
+        "OD matrix: %d roads matched → %d pairs, %.0f mapped daily BEV trips",
+        matched_roads, len(od.pairs), od.total_daily_trips(),
     )
 
     if not od.pairs:

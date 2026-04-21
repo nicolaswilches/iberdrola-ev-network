@@ -54,6 +54,17 @@ def main():
     parser.add_argument("--output-dir", type=str, default="outputs/scenarios")
     parser.add_argument("--no-plots", action="store_true")
     parser.add_argument(
+        "--scenario",
+        type=str,
+        default=None,
+        help=(
+            "Run only this scenario name in addition to baseline "
+            "(e.g. summer_peak, expand_hubs, price_reduction, "
+            "capacity_increase, high_home_charging). "
+            "Omit to run all scenarios."
+        ),
+    )
+    parser.add_argument(
         "--data-dir",
         type=str,
         default=None,
@@ -134,13 +145,25 @@ def main():
     # All scenario configs live as YAML under config/scenarios/.
     # Baseline is the file-less case handled separately by ScenarioRunner.
     scenario_dir = Path(__file__).parent / "config" / "scenarios"
-    scenario_names = [
+    all_scenario_names = [
         "summer_peak",
         "expand_hubs",
         "price_reduction",
         "capacity_increase",
         "high_home_charging",
     ]
+    if args.scenario:
+        if args.scenario == "baseline":
+            scenario_names = []  # only baseline will run
+        elif args.scenario not in all_scenario_names:
+            parser.error(
+                f"Unknown scenario '{args.scenario}'. "
+                f"Choose from: baseline, {', '.join(all_scenario_names)}"
+            )
+        else:
+            scenario_names = [args.scenario]
+    else:
+        scenario_names = all_scenario_names
     all_scenarios = []
     for sc_name in scenario_names:
         sc_path = scenario_dir / f"{sc_name}.yaml"

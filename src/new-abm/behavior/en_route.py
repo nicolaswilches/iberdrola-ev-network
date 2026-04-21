@@ -3,8 +3,11 @@
 This module answers three questions the agent faces during the trip:
 
 1. decide_to_charge_here(agent, station, ...)
-   At a planned charging stop: should the agent actually stop here,
-   given the current queue?  Or should it skip to the next station?
+   At a planned charging stop: which station should the agent use?
+   It searches ALL stations reachable within current SOC — including
+   backward/detour paths — and returns the one minimising total trip
+   time (drive + wait + drive to destination).  The engine drives to
+   whichever station is returned.
 
 2. find_emergency_station(agent, nodes_ahead, ...)
    The agent's SOC is critically low.  Find the nearest reachable station
@@ -28,7 +31,9 @@ adaptive behavior.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
+
+import networkx as nx
 
 from models.agent import VehicleAgent
 from models.network import RoadNetwork
@@ -43,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Decision 1: stop at planned station or skip?
+# Decision 1: stop at planned station, detour to a better one, or skip?
 # ---------------------------------------------------------------------------
 
 def decide_to_charge_here(
@@ -53,72 +58,172 @@ def decide_to_charge_here(
     stations_by_node: Dict[str, List[ChargingStation]],
     network: RoadNetwork,
     config: Dict,
-) -> bool:
+) -> Optional[ChargingStation]:
     """
-    Decide whether to charge at a planned stop.
+    Decide whether and where to charge given the current planned stop.
 
-    The agent skips this station only if:
-      - The queue is long enough to make waiting unacceptable, AND
-      - There is a reachable alternative station further along the route, AND
-      - The agent has enough SOC to reach that alternative.
+    Returns the ChargingStation the agent should charge at next:
+      - The *current* station  → charge here (no detour needed).
+      - A *different* station  → skip this stop and drive to the returned
+                                  station instead.  The engine handles the
+                                  drive; the station may be forward, backward,
+                                  or on a completely different road — the
+                                  decision is purely time-optimal.
+      - None                   → skip charging entirely (destination is
+                                  reachable without any more stopping, and
+                                  an opportunistic top-up is not worthwhile).
 
-    Returns True (charge here) or False (skip).
+    The decision minimises estimated total remaining trip time across ALL
+    stations reachable within current SOC from the agent's current node:
+
+        total_time = drive_to_station + expected_wait + drive_station_to_dest
     """
     min_reserve_frac = config.get("min_reserve_soc_fraction", 0.10)
     reserve_kwh = agent.usable_capacity_kwh * min_reserve_frac
     no_dest_frac = config.get("no_dest_charger_arrival_soc_fraction", 0.50)
-    dest_reserve_kwh = (agent.usable_capacity_kwh * no_dest_frac
-                        if not agent.destination_charging_access
-                        else reserve_kwh)
-
-    # --- Is the agent forced to charge here? ---
-    next_station_node, energy_to_next = _next_station_ahead(
-        station.node_id, remaining_route, stations_by_node, network, agent
+    dest_reserve_kwh = (
+        agent.usable_capacity_kwh * no_dest_frac
+        if not agent.destination_charging_access
+        else reserve_kwh
     )
 
-    if next_station_node is None:
-        remaining_distance = network.subpath_distance_km(remaining_route)
-        energy_to_dest = remaining_distance * agent.consumption_kwh_per_km
-        if agent.current_soc_kwh - energy_to_dest < dest_reserve_kwh:
+    destination = remaining_route[-1] if remaining_route else agent.destination
+
+    chosen = _find_best_charging_option(
+        agent=agent,
+        current_station=station,
+        destination=destination,
+        reserve_kwh=reserve_kwh,
+        dest_reserve_kwh=dest_reserve_kwh,
+        stations_by_node=stations_by_node,
+        network=network,
+    )
+
+    if chosen is None:
+        # Destination reachable without any more charging.
+        if _is_topping_up_worthwhile(agent, config):
             logger.debug(
-                "Agent %s forced to charge at %s (no stations ahead)",
+                "Agent %s: dest reachable but topping up at %s",
                 agent.agent_id, station.station_id,
             )
-            return True
-        # Has enough to reach destination without charging
-        # Check if topping up is still worthwhile
-        return _is_topping_up_worthwhile(agent, station, config)
+            return station
+        return None
 
-    # --- Has enough SOC to skip to next station? ---
-    can_skip = (agent.current_soc_kwh - energy_to_next) >= reserve_kwh
-
-    if not can_skip:
+    if chosen.station_id != station.station_id:
         logger.debug(
-            "Agent %s cannot skip %s (insufficient SOC for next station)",
-            agent.agent_id, station.station_id,
+            "Agent %s: rerouting from %s to %s (lower estimated trip time)",
+            agent.agent_id, station.station_id, chosen.station_id,
         )
-        return True
 
-    # --- Is the wait time acceptable? ---
-    expected_wait = station.expected_wait_time_min()
-    max_tolerance = config.get("max_queue_wait_tolerance_min", 30.0)
-    # Scale by agent queue_aversion: a more averse agent has effectively lower tolerance
-    tolerance = max_tolerance / agent.queue_aversion
+    return chosen
 
-    if expected_wait <= tolerance:
-        return True  # Queue is fine, charge here
 
-    # Queue is too long AND we can skip → skip
-    logger.debug(
-        "Agent %s skips %s (wait=%.1f min > tolerance=%.1f min)",
-        agent.agent_id, station.station_id, expected_wait, tolerance,
+def _find_best_charging_option(
+    agent: VehicleAgent,
+    current_station: ChargingStation,
+    destination: str,
+    reserve_kwh: float,
+    dest_reserve_kwh: float,
+    stations_by_node: Dict[str, List[ChargingStation]],
+    network: RoadNetwork,
+) -> Optional[ChargingStation]:
+    """
+    Search ALL stations reachable from agent.current_node within SOC budget
+    (including backward paths and detours) and return the one that minimises:
+
+        total_time = drive_time_to_station + expected_wait + drive_time_to_dest
+
+    Returns None if the destination is reachable without any charging stop.
+    Returns current_station if staying is optimal.
+    """
+    current_node = agent.current_node
+    max_range_km = (agent.current_soc_kwh - reserve_kwh) / max(
+        agent.consumption_kwh_per_km, 1e-9
     )
-    return False
+
+    if max_range_km <= 0:
+        return current_station  # forced to stay, no range left
+
+    # Dijkstra from current position — explores forward AND backward edges.
+    try:
+        dist_to: Dict[str, float] = nx.single_source_dijkstra_path_length(
+            network.graph, current_node, cutoff=max_range_km, weight="distance_km"
+        )
+    except nx.NodeNotFound:
+        return current_station
+
+    # Check if destination is reachable without any more charging.
+    dist_to_dest_km = dist_to.get(destination, float("inf"))
+    energy_to_dest = dist_to_dest_km * agent.consumption_kwh_per_km
+    if agent.current_soc_kwh - energy_to_dest >= dest_reserve_kwh:
+        return None
+
+    # Memoised travel-time from a node to the destination.
+    _time_to_dest_cache: Dict[str, float] = {}
+
+    def _time_to_dest(node: str) -> float:
+        if node not in _time_to_dest_cache:
+            _time_to_dest_cache[node] = network.shortest_path_length(
+                node, destination, "travel_time_min"
+            )
+        return _time_to_dest_cache[node]
+
+    best_station: Optional[ChargingStation] = None
+    best_cost = float("inf")
+
+    # --- Current station: already here, zero detour drive time ---
+    cost_here = current_station.expected_wait_time_min() + _time_to_dest(current_node)
+    if cost_here < best_cost:
+        best_cost = cost_here
+        best_station = current_station
+
+    # --- Other stations at current node (if multiple stations share a node) ---
+    for s in stations_by_node.get(current_node, []):
+        if s.station_id == current_station.station_id:
+            continue
+        cost = s.expected_wait_time_min() + _time_to_dest(current_node)
+        if cost < best_cost:
+            best_cost = cost
+            best_station = s
+
+    # --- All other reachable station nodes ---
+    for node, dist_km in dist_to.items():
+        if node == current_node or node not in stations_by_node:
+            continue
+
+        energy_needed = dist_km * agent.consumption_kwh_per_km
+        if agent.current_soc_kwh - energy_needed < reserve_kwh:
+            continue  # would arrive below hard reserve
+
+        drive_time_to = network.shortest_path_length(
+            current_node, node, "travel_time_min"
+        )
+        if drive_time_to == float("inf"):
+            continue
+
+        time_from = _time_to_dest(node)
+        if time_from == float("inf"):
+            continue  # station not connected onward to destination
+
+        # Pick least-loaded station at this node (ties broken by highest power).
+        alt_station = max(
+            stations_by_node[node],
+            key=lambda s: (
+                -(s.current_queue_length() / max(1, s.num_connectors)),
+                s.max_power_kw,
+            ),
+        )
+        cost = drive_time_to + alt_station.expected_wait_time_min() + time_from
+
+        if cost < best_cost:
+            best_cost = cost
+            best_station = alt_station
+
+    return best_station
 
 
 def _is_topping_up_worthwhile(
     agent: VehicleAgent,
-    station: ChargingStation,
     config: Dict,
 ) -> bool:
     """Check if a top-up stop is worth it even when not strictly needed."""
@@ -181,7 +286,7 @@ def find_emergency_station(
 def should_add_unplanned_stop(
     agent: VehicleAgent,
     station: ChargingStation,
-    remaining_distance_km: float,
+    _remaining_distance_km: float,
     stations_ahead_count: int,
     config: Dict,
 ) -> bool:
@@ -216,40 +321,3 @@ def should_add_unplanned_stop(
     soc_threshold = 0.60 - agent.risk_tolerance * 0.30
     # risk=0 → stop if below 60%; risk=1 → stop if below 30%
     return soc_frac < soc_threshold
-
-
-# ---------------------------------------------------------------------------
-# Helper: find next station ahead on the remaining route
-# ---------------------------------------------------------------------------
-
-def _next_station_ahead(
-    current_node: str,
-    remaining_route: List[str],
-    stations_by_node: Dict[str, List[ChargingStation]],
-    network: RoadNetwork,
-    agent: VehicleAgent,
-) -> Tuple[Optional[str], float]:
-    """
-    Return (node_id, cumulative_energy_kwh) for the first station ahead
-    on the route after *current_node*.  Returns (None, inf) if none found.
-    """
-    cumulative_energy = 0.0
-    in_scope = False
-
-    for i in range(len(remaining_route) - 1):
-        node = remaining_route[i]
-        next_node = remaining_route[i + 1]
-
-        if node == current_node:
-            in_scope = True
-
-        if in_scope:
-            edge_energy = compute_segment_energy(
-                [node, next_node], network, agent.consumption_kwh_per_km
-            )
-            cumulative_energy += edge_energy
-
-            if next_node in stations_by_node and next_node != current_node:
-                return next_node, cumulative_energy
-
-    return None, float("inf")

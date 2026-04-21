@@ -1,2 +1,2 @@
 scenario,num_trips,completion_rate,num_stranded,avg_wait_min,avg_charge_min,total_charge_events,total_energy_kwh,avg_station_utilization,max_peak_queue,avg_wait_at_stations_min
-baseline,25000,0.984,399,14.44,35.56,48036,1292877.5,0.035,302,7.14
+baseline,25000,0.919,2020,70.69,33.22,42563,1164115.8,0.034,523,45.55

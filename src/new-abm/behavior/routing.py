@@ -194,54 +194,55 @@ def _plan_charging_stops(
     """
     Walk the route and insert the minimum necessary charging stops.
 
-    Strategy (comfortable-arrival greedy):
-    - In each iteration, find the FARTHEST waypoint (station or destination)
-      the agent can reach while still arriving with a "comfortable" SOC
-      (reserve + comfort margin, default 30% of usable capacity).
-    - If no such waypoint exists with the comfort margin, fall back to the
-      farthest waypoint reachable with only the hard reserve (10%).
-    - This causes agents to stop earlier and more often at well-provisioned
-      corridor stations rather than funneling to a single bottleneck station
-      right at the edge of their range.
+    Strategy (queue-aware greedy):
+    - At each iteration, collect ALL waypoints reachable with comfortable SOC.
+    - Among them, pick the one with the best queue-penalised progress score:
+        score = distance_progress_km - wait_km_equivalent
+      where wait_km_equivalent converts expected queue wait to equivalent
+      driving distance at interurban speed, scaled by agent.queue_aversion.
+      This causes agents to prefer a closer, emptier station over a farther,
+      massively congested one when the queue penalty exceeds the distance gain.
+    - If no waypoint is reachable with comfort SOC, fall back to the farthest
+      reachable with hard reserve (emergency, queue-awareness suppressed).
 
-    Why not "farthest reachable with reserve only":
-    - The hard-reserve strategy (10%) makes large-battery agents skip every
-      intermediate station on a corridor and converge on the last reachable
-      stop, which often has far fewer connectors than the stations they passed.
-    - Real drivers also do not run batteries to 10%: they stop when
-      approaching ~25–30% SOC to avoid range anxiety.
+    Station-within-node selection also prefers lower queue ratio over raw power,
+    so agents at a node with multiple stations use the less-loaded one.
     """
     min_reserve = config.get("min_reserve_soc_fraction", 0.10)
     comfort_frac = config.get("arrival_comfort_soc_fraction", 0.20)
     no_dest_charger_frac = config.get("no_dest_charger_arrival_soc_fraction", 0.50)
     reserve_kwh = agent.usable_capacity_kwh * min_reserve
-    # Agents without a charger at destination need to arrive with enough
-    # SOC for local driving until they can find one (~50%).
     if not agent.destination_charging_access:
         dest_reserve_kwh = agent.usable_capacity_kwh * no_dest_charger_frac
     else:
         dest_reserve_kwh = reserve_kwh
     comfort_kwh = agent.usable_capacity_kwh * (min_reserve + comfort_frac)
 
-    # Find all stations along the route (by node index)
+    # Find all stations along the route, picking the least-loaded station at
+    # each node (tie-break: highest power).
     station_indices: Dict[int, ChargingStation] = {}
     for idx, node_id in enumerate(route):
         if node_id in stations_by_node:
-            # Pick the highest-power station at this node
-            best = max(stations_by_node[node_id], key=lambda s: s.max_power_kw)
+            best = max(
+                stations_by_node[node_id],
+                key=lambda s: (
+                    -(s.current_queue_length() / max(1, s.num_connectors)),
+                    s.max_power_kw,
+                ),
+            )
             station_indices[idx] = best
 
     destination_idx = len(route) - 1
-    candidates = sorted(set(sorted(station_indices.keys()) + [destination_idx]))
+    candidates = sorted(set(list(station_indices.keys()) + [destination_idx]))
 
     stops: List[ChargingStation] = []
     soc = agent.current_soc_kwh
     current_idx = 0
 
     while current_idx < destination_idx:
-        # --- Pass 1: farthest waypoint reachable with comfortable arrival SOC ---
-        best_idx = None
-        for waypoint_idx in reversed(candidates):
+        # --- Pass 1: collect all waypoints reachable with comfortable SOC ---
+        reachable: List[Tuple[int, float]] = []  # (waypoint_idx, arriving_soc)
+        for waypoint_idx in candidates:
             if waypoint_idx <= current_idx:
                 continue
             segment = route[current_idx : waypoint_idx + 1]
@@ -249,16 +250,18 @@ def _plan_charging_stops(
                 segment, network, agent.consumption_kwh_per_km
             )
             arriving_soc = soc - energy_needed
+            threshold = dest_reserve_kwh if waypoint_idx == destination_idx else comfort_kwh
+            if arriving_soc >= threshold:
+                reachable.append((waypoint_idx, arriving_soc))
 
-            if waypoint_idx == destination_idx:
-                if arriving_soc >= dest_reserve_kwh:
-                    best_idx = waypoint_idx
-                    break
-            else:
-                # Intermediate station: require comfortable arrival SOC
-                if arriving_soc >= comfort_kwh:
-                    best_idx = waypoint_idx
-                    break
+        if reachable:
+            best_idx = _pick_queue_aware_stop(
+                reachable, station_indices, destination_idx,
+                soc, agent.consumption_kwh_per_km, agent.queue_aversion,
+                agent.max_comfortable_speed_kmh,
+            )
+        else:
+            best_idx = None
 
         # --- Pass 2 fallback: farthest reachable with only hard reserve ---
         if best_idx is None:
@@ -281,7 +284,7 @@ def _plan_charging_stops(
             )
             break
 
-        # Compute arriving SOC
+        # Compute arriving SOC at chosen stop
         segment = route[current_idx : best_idx + 1]
         energy_needed = compute_segment_energy(
             segment, network, agent.consumption_kwh_per_km
@@ -289,11 +292,9 @@ def _plan_charging_stops(
         arriving_soc = soc - energy_needed
 
         if best_idx == destination_idx:
-            # Reached destination without needing another stop
             soc = arriving_soc
             current_idx = best_idx
         else:
-            # Intermediate station — always stop and charge to 80%
             station = station_indices[best_idx]
             stops.append(station)
             target_soc = agent.usable_capacity_kwh * 0.80
@@ -301,6 +302,59 @@ def _plan_charging_stops(
             current_idx = best_idx
 
     return stops
+
+
+def _pick_queue_aware_stop(
+    reachable: List[Tuple[int, float]],
+    station_indices: Dict[int, "ChargingStation"],
+    destination_idx: int,
+    current_soc: float,
+    consumption_kwh_per_km: float,
+    queue_aversion: float,
+    speed_kmh: float,
+) -> int:
+    """
+    Among reachable (waypoint_idx, arriving_soc) pairs, return the index that
+    maximises queue-penalised progress:
+
+        score = progress_km - wait_km_equivalent
+
+    where:
+        progress_km        = energy consumed to reach stop / consumption rate
+        wait_km_equivalent = expected_wait_min × speed_kmh / 60 × queue_aversion
+
+    Intuitively: the agent trades off "how far does this stop advance me" against
+    "how much time (in equivalent km) will I lose waiting in the queue there."
+    If the farthest station has a smaller score than a closer one, the agent
+    prefers the closer one — it makes more real progress per minute spent.
+
+    Destination is always preferred when reachable (no queue cost).
+    """
+    # Destination reachable → take it, no charging stop needed.
+    for idx, _ in reachable:
+        if idx == destination_idx:
+            return destination_idx
+
+    best_idx = reachable[-1][0]  # default: farthest reachable
+    best_score = float("-inf")
+
+    for waypoint_idx, arriving_soc in reachable:
+        station = station_indices.get(waypoint_idx)
+        if station is None:
+            continue
+
+        energy_consumed = current_soc - arriving_soc
+        progress_km = energy_consumed / max(consumption_kwh_per_km, 1e-9)
+
+        wait_min = station.expected_wait_time_min()
+        wait_km_equiv = wait_min * speed_kmh / 60.0 * queue_aversion
+
+        score = progress_km - wait_km_equiv
+        if score > best_score:
+            best_score = score
+            best_idx = waypoint_idx
+
+    return best_idx
 
 
 def _find_farthest_reachable_station(

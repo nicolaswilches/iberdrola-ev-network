@@ -128,7 +128,12 @@ def vehicle_trip_process(
     agent.total_distance_km = total_dist
 
     # --- Drive the route waypoint by waypoint ---
-    for waypoint in waypoints:
+    # While loop (not for) so that detour + replan can replace the waypoint
+    # list mid-trip without restarting the entire process.
+    wi = 0
+    while wi < len(waypoints):
+        waypoint = waypoints[wi]
+
         # Check energy feasibility before driving this segment
         segment_energy = compute_segment_energy(
             waypoint.nodes, network, agent.consumption_kwh_per_km
@@ -165,7 +170,7 @@ def vehicle_trip_process(
         # --- Charging decision at this waypoint ---
         if waypoint.is_charging_stop and waypoint.station is not None:
             remaining_route = network.subpath_from_node(route, waypoint.end_node)
-            should_charge = decide_to_charge_here(
+            chosen_station = decide_to_charge_here(
                 agent=agent,
                 station=waypoint.station,
                 remaining_route=remaining_route,
@@ -173,21 +178,42 @@ def vehicle_trip_process(
                 network=network,
                 config=config,
             )
-            if should_charge:
+
+            if chosen_station is None:
+                # Skip charging — destination reachable and top-up not worthwhile.
+                pass
+
+            elif chosen_station.node_id == waypoint.end_node:
+                # Charge at this node (may be current or a different station
+                # at the same node — no driving required either way).
                 charged = yield from _execute_charging(
-                    env, agent, waypoint.station,
+                    env, agent, chosen_station,
                     route, network, stations_by_node, config, collector
                 )
-                # On abandonment, the loop continues and the next segment
-                # check at line ~138 will trigger an emergency charge at a
-                # different station if SOC runs low. No extra retry needed
-                # here because the abandonment guard already verified an
-                # alternative is reachable within current SOC.
+                # On queue abandonment the emergency path takes over if SOC
+                # drops low on the next segment (checked at loop top).
                 if charged is False:
                     logger.debug(
                         "Agent %s abandoned %s; relying on emergency path.",
-                        agent.agent_id, waypoint.station.station_id,
+                        agent.agent_id, chosen_station.station_id,
                     )
+
+            else:
+                # Detour to a different node (forward, backward, or off-route).
+                result = yield from _execute_detour_and_replan(
+                    env, agent, chosen_station,
+                    network, stations_by_node, config, collector,
+                )
+                if result is not None:
+                    route, waypoints = result
+                    agent.route = route
+                    wi = 0
+                    continue
+                # Detour infeasible (SOC race condition) — fall back to planned stop.
+                yield from _execute_charging(
+                    env, agent, waypoint.station,
+                    route, network, stations_by_node, config, collector
+                )
 
         elif not waypoint.is_charging_stop and waypoint.end_node in stations_by_node:
             # Opportunistic top-up at an unplanned node
@@ -207,6 +233,8 @@ def vehicle_trip_process(
                     env, agent, station,
                     route, network, stations_by_node, config, collector
                 )
+
+        wi += 1
 
     # --- Trip complete ---
     agent.status = "completed"
@@ -233,6 +261,94 @@ def vehicle_trip_process(
         route_node_count=len(agent.route),
         final_soc_kwh=agent.current_soc_kwh,
     )
+
+
+# ---------------------------------------------------------------------------
+# Detour sub-process
+# ---------------------------------------------------------------------------
+
+def _execute_detour_and_replan(
+    env: simpy.Environment,
+    agent: VehicleAgent,
+    chosen_station: ChargingStation,
+    network: RoadNetwork,
+    stations_by_node: Dict[str, List[ChargingStation]],
+    config: Dict,
+    collector: ResultsCollector,
+) -> Generator:
+    """
+    Drive to chosen_station (which may be backward or off the current route),
+    charge there, then replan the remaining trip to destination.
+
+    Returns (new_route, new_waypoints) on success, or None if the detour is
+    no longer feasible (SOC race condition between decision and execution).
+    """
+    # Path to the chosen station from current position.
+    detour_path = network.shortest_path_gc(
+        agent.current_node,
+        chosen_station.node_id,
+        agent.value_of_time_eur_per_hour,
+        getattr(agent, "max_comfortable_speed_kmh", None),
+    )
+    if not detour_path or len(detour_path) < 2:
+        return None
+
+    detour_energy = compute_segment_energy(
+        detour_path, network, agent.consumption_kwh_per_km
+    )
+    reserve_kwh = agent.usable_capacity_kwh * float(
+        config.get("min_reserve_soc_fraction", 0.10)
+    )
+    if agent.current_soc_kwh - detour_energy < reserve_kwh:
+        # SOC depleted more than expected since the decision was made.
+        return None
+
+    detour_time = network.subpath_travel_time_min(detour_path)
+    logger.debug(
+        "[t=%.0f] Agent %s detouring to %s (%.0f min, %.1f kWh)",
+        env.now, agent.agent_id, chosen_station.station_id,
+        detour_time, detour_energy,
+    )
+
+    yield env.timeout(detour_time)
+    agent.current_soc_kwh = max(0.0, agent.current_soc_kwh - detour_energy)
+    agent.current_node = chosen_station.node_id
+
+    # Build a context route (station → destination) for _execute_charging.
+    context_route = network.shortest_path_gc(
+        chosen_station.node_id,
+        agent.destination,
+        agent.value_of_time_eur_per_hour,
+        getattr(agent, "max_comfortable_speed_kmh", None),
+    ) or [chosen_station.node_id, agent.destination]
+
+    yield from _execute_charging(
+        env, agent, chosen_station, context_route,
+        network, stations_by_node, config, collector,
+    )
+
+    # Replan remaining route from new position to destination.
+    saved_origin = agent.origin
+    agent.origin = agent.current_node
+    new_route, new_stops = plan_route_with_stops(
+        agent, network, stations_by_node, config
+    )
+    agent.origin = saved_origin
+
+    if not new_route:
+        new_route = network.shortest_path_gc(
+            agent.current_node,
+            agent.destination,
+            agent.value_of_time_eur_per_hour,
+            getattr(agent, "max_comfortable_speed_kmh", None),
+        )
+        new_stops = []
+
+    if not new_route:
+        return None
+
+    new_waypoints = build_trip_waypoints(new_route, new_stops)
+    return new_route, new_waypoints
 
 
 # ---------------------------------------------------------------------------
