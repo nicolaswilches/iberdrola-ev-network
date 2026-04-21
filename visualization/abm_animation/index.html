@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Spain EV Network — ABM Simulation</title>
+    <title>Spain EV Network &mdash; ABM Simulation</title>
     <script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"></script>
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
@@ -128,10 +128,11 @@
         #playback button:hover { background: rgba(255,255,255,0.2); }
         #playback button.active { background: rgba(74, 222, 128, 0.3); border-color: #4ade80; }
 
-        #speed-label {
-            font-size: 11px;
-            color: rgba(255,255,255,0.5);
+        #btn-speed {
             margin-left: auto;
+            font-variant-numeric: tabular-nums;
+            min-width: 44px;
+            text-align: center;
         }
 
         #legend {
@@ -199,7 +200,7 @@
 
     <div id="controls">
         <h1>EV Network Simulation</h1>
-        <div class="subtitle">Agent-Based Model — Spain Interurban 2027</div>
+        <div class="subtitle">Agent-Based Model &mdash; Spain Interurban 2027</div>
 
         <div class="stat-row">
             <span class="stat-label">Active Vehicles</span>
@@ -223,10 +224,9 @@
         <div id="progress-bar"><div id="progress-fill"></div></div>
 
         <div id="playback">
-            <button id="btn-play" class="active">Play</button>
-            <button id="btn-pause">Pause</button>
+            <button id="btn-playpause" class="active">Pause</button>
             <button id="btn-reset">Reset</button>
-            <span id="speed-label">1x</span>
+            <button id="btn-speed">1x</button>
         </div>
     </div>
 
@@ -234,7 +234,7 @@
         <div class="legend-title">Battery Level</div>
         <div class="legend-item">
             <div class="legend-gradient"></div>
-            <span>0% — 100%</span>
+            <span>0% &mdash; 100%</span>
         </div>
         <div class="legend-item" style="margin-top: 8px;">
             <div class="legend-line" style="background: rgba(74, 222, 128, 0.25);"></div>
@@ -301,7 +301,10 @@
             proposedData = data.proposed || [];
             animationTime = SIM_START_MIN;
             initDeck();
-            animate();
+            // Use rAF for the initial call so `animate` always receives a
+            // real frameTime. Calling animate() directly passed undefined,
+            // which poisoned lastFrameTime and made deltaMs NaN forever.
+            requestAnimationFrame(animate);
         })
         .catch(err => {
             console.error('Failed to load trajectories:', err);
@@ -329,7 +332,7 @@
                       `<div style="font-size:11px;opacity:0.7;margin-top:2px;">Proposed station</div>` +
                       `<div style="font-size:11px;margin-top:6px;">` +
                       `<span style="opacity:0.6;">Route</span> ${object.road}<br/>` +
-                      `<span style="opacity:0.6;">Chargers</span> ${object.chargers} × 150 kW` +
+                      `<span style="opacity:0.6;">Chargers</span> ${object.chargers} &times; 150 kW` +
                       `</div>`,
                     style: { background: 'rgba(10,10,10,0.92)', color: '#fff', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', padding: '10px 12px', fontFamily: 'Inter, -apple-system, sans-serif' }
                 };
@@ -504,7 +507,7 @@
             opacity: 0.9,
         });
 
-        // Proposed stations — green blinking marker. Design shared with
+        // Proposed stations -- green blinking marker. Design shared with
         // bi_map.html: inner filled circle + pulsing outer ring at ~0.8Hz.
         // The pulse is driven by wall-clock time so it continues blinking
         // while the simulation is paused.
@@ -580,8 +583,9 @@
             animationTime = SIM_END_MIN;
             animationDone = true;
             playing = false;
-            document.getElementById('btn-pause').classList.add('active');
-            document.getElementById('btn-play').classList.remove('active');
+            const btn = document.getElementById('btn-playpause');
+            btn.textContent = 'Play';
+            btn.classList.remove('active');
         }
 
         updateLayers();
@@ -589,24 +593,30 @@
     }
 
     // --- Controls ---
-    document.getElementById('btn-play').addEventListener('click', () => {
+    // Single play/pause toggle. When playing it reads "Pause" (the action
+    // clicking it will perform); when paused or done it reads "Play".
+    document.getElementById('btn-playpause').addEventListener('click', () => {
+        const btn = document.getElementById('btn-playpause');
         if (animationDone) {
-            // If finished, restart
             animationTime = SIM_START_MIN;
             animationDone = false;
+            playing = true;
+            lastFrameTime = null;
+            btn.textContent = 'Pause';
+            btn.classList.add('active');
+            requestAnimationFrame(animate);
+            return;
         }
-        playing = true;
-        lastFrameTime = null;
-        document.getElementById('btn-play').classList.add('active');
-        document.getElementById('btn-pause').classList.remove('active');
-        requestAnimationFrame(animate);
-    });
-
-    document.getElementById('btn-pause').addEventListener('click', () => {
-        playing = false;
-        lastFrameTime = null;
-        document.getElementById('btn-pause').classList.add('active');
-        document.getElementById('btn-play').classList.remove('active');
+        playing = !playing;
+        if (playing) {
+            lastFrameTime = null;
+            btn.textContent = 'Pause';
+            btn.classList.add('active');
+            requestAnimationFrame(animate);
+        } else {
+            btn.textContent = 'Play';
+            btn.classList.remove('active');
+        }
     });
 
     document.getElementById('btn-reset').addEventListener('click', () => {
@@ -614,19 +624,19 @@
         animationDone = false;
         lastFrameTime = null;
         playing = true;
-        document.getElementById('btn-play').classList.add('active');
-        document.getElementById('btn-pause').classList.remove('active');
+        const btn = document.getElementById('btn-playpause');
+        btn.textContent = 'Pause';
+        btn.classList.add('active');
         updateLayers();
         requestAnimationFrame(animate);
     });
 
-    document.getElementById('speed-label').addEventListener('click', () => {
+    document.getElementById('btn-speed').addEventListener('click', () => {
         const speeds = [0.5, 1, 2, 4];
         const idx = speeds.indexOf(speed);
         speed = speeds[(idx + 1) % speeds.length];
-        document.getElementById('speed-label').textContent = speed + 'x';
+        document.getElementById('btn-speed').textContent = speed + 'x';
     });
-    document.getElementById('speed-label').style.cursor = 'pointer';
     </script>
 </body>
 </html>

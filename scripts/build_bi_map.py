@@ -3,12 +3,19 @@ Build visualization/bi_map.html as a deck.gl interactive map aligned
 with visualization/abm_animation/index.html's design language.
 
 Layers (toggleable via checkboxes):
-  - Energy substations (~2,147) — triangles coloured by DSO:
-      Endesa = amber, i-DE = red, Viesgo = blue.
-  - Existing chargers (~3,246) — squares coloured by nearest substation's
-    grid_status: Sufficient = green, Moderate = amber, Congested = red.
-  - Proposed stations (8) — green blinking circles (same design as the
+  - Interurban corridors (~58 polylines) -- minimal translucent white,
+    same geometry source as the ABM animation.
+  - Energy substations (~2,147) -- triangles coloured by DSO.
+  - Existing fast chargers (~3,246) -- squares coloured by the DSO of
+    their nearest substation (a charger's power-supply provider).
+  - Proposed stations (8) -- green blinking circles (same design as the
     ABM animation proposed markers).
+
+Palette is provider-based for both substations and chargers so the two
+layers never collide on colour. Corporate colour choices:
+  - i-DE (Iberdrola) = green
+  - Endesa           = blue
+  - Viesgo           = red
 
 Hover tooltips expose contextual metadata (operator, power, connectors,
 DSO, capacity, status, etc.). A legend and control panel mirror the ABM
@@ -32,17 +39,27 @@ from sklearn.neighbors import BallTree
 REPO = Path(__file__).resolve().parent.parent
 DATA = REPO / "data" / "processed"
 OUT = REPO / "visualization" / "bi_map.html"
+CORRIDOR_SRC = REPO / "visualization" / "abm_animation" / "trajectories.json"
 
-# Design tokens — kept in sync with abm_animation/index.html
+# Design tokens -- kept in sync with abm_animation/index.html
+# Corporate palette by DSO:
+#   i-DE (Iberdrola) green, Endesa blue, Viesgo red
 DSO_COLORS = {
-    "Endesa": [251, 191, 36],   # amber
-    "i-DE":   [248, 113, 113],  # red
-    "Viesgo": [96, 165, 250],   # blue
+    "i-DE":   [74, 222, 128],   # Iberdrola green
+    "Endesa": [59, 130, 246],   # Endesa blue
+    "Viesgo": [239, 68, 68],    # Viesgo red
 }
-STATUS_COLORS = {
-    "Sufficient": [74, 222, 128],  # green
-    "Moderate":   [251, 191, 36],  # amber
-    "Congested":  [248, 113, 113], # red
+DSO_HEX = {
+    "i-DE":   "#4ade80",
+    "Endesa": "#3b82f6",
+    "Viesgo": "#ef4444",
+}
+# Grid status colours are kept only for the tooltip text highlight, not
+# for the base marker colour (which is DSO-based).
+STATUS_HEX = {
+    "Sufficient": "#4ade80",
+    "Moderate":   "#fbbf24",
+    "Congested":  "#f87171",
 }
 PROPOSED_GREEN = [74, 222, 128]
 
@@ -53,7 +70,7 @@ PROPOSED_GREEN = [74, 222, 128]
 # ---------------------------------------------------------------------------
 def make_icon_atlas() -> str:
     """Return a data:image/png;base64,... URL for a 2-icon atlas (triangle,
-    square), each 128×128 px. IconLayer tints white pixels by getColor."""
+    square), each 128x128 px. IconLayer tints white pixels by getColor."""
     atlas = Image.new("RGBA", (256, 128), (0, 0, 0, 0))
     draw = ImageDraw.Draw(atlas)
     # Triangle (up-pointing) in the left slot, inset slightly.
@@ -76,10 +93,9 @@ ICON_MAPPING = {
 # ---------------------------------------------------------------------------
 def load_substations() -> pd.DataFrame:
     df = pd.read_csv(DATA / "grid_consolidated.csv")
-    # Some rows have NaN coords — drop them.
     df = df.dropna(subset=["latitude", "longitude"]).copy()
     # Collapse rare unknown DSO labels to i-DE so the colour mapping covers
-    # 100% of the points (there are a handful in the wild).
+    # 100% of the points.
     df.loc[~df["distributor_network"].isin(DSO_COLORS), "distributor_network"] = "i-DE"
     return df
 
@@ -87,7 +103,6 @@ def load_substations() -> pd.DataFrame:
 def load_chargers() -> pd.DataFrame:
     df = pd.read_csv(DATA / "interurban_chargers_baseline.csv")
     df = df.dropna(subset=["latitude", "longitude"]).copy()
-    # Only carry the columns we show in the tooltip; keeps payload lean.
     keep = [
         "site_id", "name", "latitude", "longitude", "num_stations",
         "n_connectors", "max_power_kw", "connector_types", "province",
@@ -97,7 +112,6 @@ def load_chargers() -> pd.DataFrame:
         if col not in df.columns:
             df[col] = ""
     df = df[keep]
-    # Fast-charger filter mirrors NB04's ≥50 kW rule for "high-grade" dots.
     df["max_power_kw"] = pd.to_numeric(df["max_power_kw"], errors="coerce").fillna(0)
     df = df[df["max_power_kw"] >= 50].copy()
     return df
@@ -108,13 +122,29 @@ def load_proposed() -> pd.DataFrame:
     return df
 
 
+def load_corridors() -> list[dict]:
+    """Pull the corridor polylines from the ABM animation bundle so both
+    maps overlay the exact same road geometry."""
+    if not CORRIDOR_SRC.exists():
+        return []
+    with open(CORRIDOR_SRC) as f:
+        bundle = json.load(f)
+    corridors = bundle.get("corridors", []) or []
+    out = []
+    for c in corridors:
+        path = c.get("path") or []
+        if len(path) < 2:
+            continue
+        out.append({"road": c.get("road", ""), "path": path})
+    return out
+
+
 def nearest_substation_status(
     chargers: pd.DataFrame, subs: pd.DataFrame
 ) -> pd.DataFrame:
-    """For each charger, tag `grid_status` inherited from its nearest
-    substation (haversine, unbounded) so the colour layer can reflect the
-    local grid constraint."""
-    # BallTree expects radians
+    """For each charger, tag the DSO, grid status and distance of its
+    nearest substation (haversine, unbounded). The DSO drives the marker
+    colour; the status is surfaced in the tooltip."""
     sub_rad = np.radians(subs[["latitude", "longitude"]].values)
     chg_rad = np.radians(chargers[["latitude", "longitude"]].values)
     tree = BallTree(sub_rad, metric="haversine")
@@ -124,7 +154,6 @@ def nearest_substation_status(
     sub_dso = subs["distributor_network"].iloc[idx[:, 0]].values
     sub_lat = subs["latitude"].iloc[idx[:, 0]].values
     sub_lon = subs["longitude"].iloc[idx[:, 0]].values
-    # Distance in km
     R_KM = 6371.0
     haversine_km = R_KM * np.arccos(
         np.clip(
@@ -143,7 +172,7 @@ def nearest_substation_status(
 
 
 # ---------------------------------------------------------------------------
-# Marker record → JSON dicts (lean, with pre-computed colour arrays)
+# Marker record -> JSON dicts (lean, with pre-computed colour arrays)
 # ---------------------------------------------------------------------------
 def substation_markers(subs: pd.DataFrame) -> list[dict]:
     out = []
@@ -163,8 +192,13 @@ def substation_markers(subs: pd.DataFrame) -> list[dict]:
 
 
 def charger_markers(chargers: pd.DataFrame) -> list[dict]:
+    """Charger markers are coloured by their nearest substation's DSO
+    (the provider supplying their power), matching the substation palette."""
     out = []
     for _, r in chargers.iterrows():
+        dso = r.get("nearest_substation_dso") or "i-DE"
+        if dso not in DSO_COLORS:
+            dso = "i-DE"
         status = r.get("grid_status") or "Sufficient"
         out.append({
             "position": [round(float(r["longitude"]), 5), round(float(r["latitude"]), 5)],
@@ -176,8 +210,9 @@ def charger_markers(chargers: pd.DataFrame) -> list[dict]:
             "province": str(r.get("province", "") or ""),
             "nearest_sub": str(r.get("nearest_substation", "") or ""),
             "nearest_sub_km": float(r.get("nearest_substation_km") or 0),
+            "dso": dso,
             "status": status,
-            "color": STATUS_COLORS.get(status, STATUS_COLORS["Sufficient"]),
+            "color": DSO_COLORS[dso],
         })
     return out
 
@@ -209,7 +244,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Spain EV Network — BI Map</title>
+<title>Spain EV Network &mdash; BI Map</title>
 <script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"></script>
 <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
@@ -241,8 +276,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .stat-value { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .stat-value.green { color: #4ade80; }
   .stat-value.amber { color: #fbbf24; }
-  .stat-value.red   { color: #f87171; }
-  .stat-value.blue  { color: #60a5fa; }
+  .stat-value.red   { color: #ef4444; }
+  .stat-value.blue  { color: #3b82f6; }
 
   #layer-toggles { margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.1); }
   .layer-title { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: rgba(255,255,255,0.4); margin-bottom: 8px; }
@@ -266,8 +301,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     color: rgba(255,255,255,0.35); z-index: 50;
   }
 
-  /* Custom pulsing ring for proposed markers rendered as DOM overlay —
-     actually done in deck.gl; this class is for the legend swatch. */
   .pulse {
     border-radius: 50%;
     background: #4ade80;
@@ -286,7 +319,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <div id="controls" class="panel">
     <h1>EV Infrastructure Map</h1>
-    <div class="subtitle">Spain Interurban — 2027 Proposal</div>
+    <div class="subtitle">Spain Interurban &mdash; 2027 Proposal</div>
 
     <div class="stat-row">
       <span class="stat-label">Proposed Stations</span>
@@ -312,6 +345,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div id="layer-toggles">
       <div class="layer-title">Layers</div>
       <label class="layer-row">
+        <input type="checkbox" id="toggle-corridors" checked>
+        <span class="icon" id="swatch-corridors"></span>
+        <span class="label">Interurban corridors</span>
+        <span class="count" id="count-corridors"></span>
+      </label>
+      <label class="layer-row">
         <input type="checkbox" id="toggle-subs" checked>
         <span class="icon" id="swatch-subs"></span>
         <span class="label">Substations by DSO</span>
@@ -320,7 +359,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <label class="layer-row">
         <input type="checkbox" id="toggle-chargers" checked>
         <span class="icon" id="swatch-chargers"></span>
-        <span class="label">Existing chargers by congestion</span>
+        <span class="label">Existing chargers by DSO</span>
         <span class="count" id="count-chargers"></span>
       </label>
       <label class="layer-row">
@@ -333,15 +372,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <div id="legend" class="panel">
-    <div class="legend-title">Substation DSO</div>
-    <div class="legend-item"><span class="legend-swatch" id="legend-endesa"></span><span>Endesa</span></div>
-    <div class="legend-item"><span class="legend-swatch" id="legend-ide"></span><span>i-DE (Iberdrola)</span></div>
-    <div class="legend-item"><span class="legend-swatch" id="legend-viesgo"></span><span>Viesgo</span></div>
+    <div class="legend-title">Provider (DSO)</div>
+    <div class="legend-item">
+      <span class="legend-swatch" id="legend-ide-tri"></span>
+      <span class="legend-swatch" id="legend-ide-sq"></span>
+      <span>i-DE (Iberdrola)</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-swatch" id="legend-endesa-tri"></span>
+      <span class="legend-swatch" id="legend-endesa-sq"></span>
+      <span>Endesa</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-swatch" id="legend-viesgo-tri"></span>
+      <span class="legend-swatch" id="legend-viesgo-sq"></span>
+      <span>Viesgo</span>
+    </div>
 
-    <div class="legend-title">Charger grid status</div>
-    <div class="legend-item"><span class="legend-swatch" id="legend-suff"></span><span>Sufficient (≥5 MW)</span></div>
-    <div class="legend-item"><span class="legend-swatch" id="legend-mod"></span><span>Moderate (1–5 MW)</span></div>
-    <div class="legend-item"><span class="legend-swatch" id="legend-cong"></span><span>Congested (&lt;1 MW)</span></div>
+    <div class="legend-title">Shapes</div>
+    <div class="legend-item"><span class="legend-swatch" id="legend-shape-tri"></span><span>Substation</span></div>
+    <div class="legend-item"><span class="legend-swatch" id="legend-shape-sq"></span><span>Existing charger</span></div>
 
     <div class="legend-title">Proposed network</div>
     <div class="legend-item">
@@ -350,7 +400,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <div id="attribution">Team Greenlabs · Iberdrola Datathon 2026</div>
+  <div id="attribution">Team Greenlabs &middot; Iberdrola Datathon 2026</div>
 
 <script type="application/json" id="__bi_map_data__">__DATA_JSON__</script>
 
@@ -359,34 +409,39 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   const ICON_ATLAS = '__ICON_ATLAS__';
   const ICON_MAPPING = __ICON_MAPPING_JSON__;
 
-  // ----- Paint legend/stat swatches from the design tokens embedded in JS -----
-  const DSO_HEX = { Endesa: '#fbbf24', 'i-DE': '#f87171', Viesgo: '#60a5fa' };
+  // ----- Design tokens (must match build_bi_map.py) -----
+  const DSO_HEX = { 'i-DE': '#4ade80', 'Endesa': '#3b82f6', 'Viesgo': '#ef4444' };
   const STATUS_HEX = { Sufficient: '#4ade80', Moderate: '#fbbf24', Congested: '#f87171' };
-  function paintSwatch(id, color, shape) {
+
+  function setSwatch(id, color, shape) {
     const el = document.getElementById(id); if (!el) return;
+    el.style.width = '14px'; el.style.height = '14px';
+    el.style.background = color;
     if (shape === 'triangle') {
-      el.style.width = '14px'; el.style.height = '14px';
-      el.style.background = color;
       el.style.clipPath = 'polygon(50% 0%, 0% 100%, 100% 100%)';
     } else if (shape === 'square') {
-      el.style.width = '12px'; el.style.height = '12px';
-      el.style.background = color; el.style.margin = '1px';
+      el.style.clipPath = 'none';
+      el.style.width = '12px'; el.style.height = '12px'; el.style.margin = '1px';
+    } else if (shape === 'line') {
+      el.style.height = '3px'; el.style.margin = '5px 0';
     }
   }
-  paintSwatch('legend-endesa', DSO_HEX.Endesa, 'triangle');
-  paintSwatch('legend-ide', DSO_HEX['i-DE'], 'triangle');
-  paintSwatch('legend-viesgo', DSO_HEX.Viesgo, 'triangle');
-  paintSwatch('legend-suff', STATUS_HEX.Sufficient, 'square');
-  paintSwatch('legend-mod', STATUS_HEX.Moderate, 'square');
-  paintSwatch('legend-cong', STATUS_HEX.Congested, 'square');
-  // swatches in the layer toggles (use DSO-neutral style)
-  const sSubs = document.getElementById('swatch-subs');
-  sSubs.style.width='14px'; sSubs.style.height='14px';
-  sSubs.style.background='#fbbf24'; sSubs.style.clipPath='polygon(50% 0%, 0% 100%, 100% 100%)';
-  const sChg = document.getElementById('swatch-chargers');
-  sChg.style.width='12px'; sChg.style.height='12px'; sChg.style.background='#f87171'; sChg.style.margin='1px';
+  setSwatch('legend-ide-tri', DSO_HEX['i-DE'], 'triangle');
+  setSwatch('legend-ide-sq',  DSO_HEX['i-DE'], 'square');
+  setSwatch('legend-endesa-tri', DSO_HEX['Endesa'], 'triangle');
+  setSwatch('legend-endesa-sq',  DSO_HEX['Endesa'], 'square');
+  setSwatch('legend-viesgo-tri', DSO_HEX['Viesgo'], 'triangle');
+  setSwatch('legend-viesgo-sq',  DSO_HEX['Viesgo'], 'square');
+  setSwatch('legend-shape-tri', 'rgba(255,255,255,0.6)', 'triangle');
+  setSwatch('legend-shape-sq',  'rgba(255,255,255,0.6)', 'square');
+
+  // Layer-toggle row swatches (neutral colours -- the map shows the palette)
+  setSwatch('swatch-corridors', 'rgba(255,255,255,0.35)', 'line');
+  setSwatch('swatch-subs', 'rgba(255,255,255,0.7)', 'triangle');
+  setSwatch('swatch-chargers', 'rgba(255,255,255,0.7)', 'square');
 
   // ----- Stats -----
+  const corridors = DATA.corridors || [];
   const subs = DATA.substations || [];
   const chgs = DATA.chargers || [];
   const props = DATA.proposed || [];
@@ -395,13 +450,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   document.getElementById('stat-existing').textContent = chgs.length.toLocaleString();
   document.getElementById('stat-subs').textContent = subs.length.toLocaleString();
   document.getElementById('stat-congested').textContent = subs.filter(s => s.status === 'Congested').length.toLocaleString();
+  document.getElementById('count-corridors').textContent = corridors.length.toLocaleString();
   document.getElementById('count-subs').textContent = subs.length.toLocaleString();
   document.getElementById('count-chargers').textContent = chgs.length.toLocaleString();
   document.getElementById('count-proposed').textContent = props.length.toLocaleString();
 
   // ----- Layer visibility state -----
-  const visible = { subs: true, chargers: true, proposed: true };
-  ['subs', 'chargers', 'proposed'].forEach(k => {
+  const visible = { corridors: true, subs: true, chargers: true, proposed: true };
+  ['corridors', 'subs', 'chargers', 'proposed'].forEach(k => {
     document.getElementById('toggle-' + k).addEventListener('change', (e) => {
       visible[k] = e.target.checked;
       render();
@@ -413,7 +469,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     return {
       html:
         `<div style="font-weight:600;color:${DSO_HEX[o.dso] || '#fff'};font-size:12px;">${o.name}</div>` +
-        `<div style="font-size:11px;opacity:0.7;margin-top:2px;">${o.dso} · Substation</div>` +
+        `<div style="font-size:11px;opacity:0.7;margin-top:2px;">${o.dso} &middot; Substation</div>` +
         `<div style="font-size:11px;margin-top:6px;">` +
         `<span style="opacity:0.6;">Available capacity</span> ${o.capacity_mw} MW<br/>` +
         `<span style="opacity:0.6;">Voltage</span> ${o.voltage_kv} kV<br/>` +
@@ -425,11 +481,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   function tooltipForCharger(o) {
     return {
       html:
-        `<div style="font-weight:600;color:${STATUS_HEX[o.status] || '#fff'};font-size:12px;">${o.name || 'Fast charger'}</div>` +
-        `<div style="font-size:11px;opacity:0.7;margin-top:2px;">${o.road || '—'} · ${o.province || ''}</div>` +
+        `<div style="font-weight:600;color:${DSO_HEX[o.dso] || '#fff'};font-size:12px;">${o.name || 'Fast charger'}</div>` +
+        `<div style="font-size:11px;opacity:0.7;margin-top:2px;">${o.road || ''} &middot; ${o.province || ''}</div>` +
         `<div style="font-size:11px;margin-top:6px;">` +
         `<span style="opacity:0.6;">Power</span> ${o.power_kw} kW<br/>` +
-        `<span style="opacity:0.6;">Connectors</span> ${o.connectors}${o.connector_types ? ' · ' + o.connector_types : ''}<br/>` +
+        `<span style="opacity:0.6;">Connectors</span> ${o.connectors}${o.connector_types ? ' &middot; ' + o.connector_types : ''}<br/>` +
+        `<span style="opacity:0.6;">Provider</span> <span style="color:${DSO_HEX[o.dso] || '#fff'};">${o.dso}</span><br/>` +
         `<span style="opacity:0.6;">Nearest sub</span> ${o.nearest_sub} (${o.nearest_sub_km} km)<br/>` +
         `<span style="opacity:0.6;">Local grid</span> <span style="color:${STATUS_HEX[o.status] || '#fff'};">${o.status}</span>` +
         `</div>`,
@@ -440,11 +497,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     return {
       html:
         `<div style="font-weight:600;color:#4ade80;font-size:12px;">${o.id}</div>` +
-        `<div style="font-size:11px;opacity:0.7;margin-top:2px;">Proposed station · ${o.road}${o.is_tent ? ' · TEN-T ' + o.tent_tier : ''}</div>` +
+        `<div style="font-size:11px;opacity:0.7;margin-top:2px;">Proposed station &middot; ${o.road}${o.is_tent ? ' &middot; TEN-T ' + o.tent_tier : ''}</div>` +
         `<div style="font-size:11px;margin-top:6px;">` +
-        `<span style="opacity:0.6;">Chargers</span> ${o.chargers} × 150 kW<br/>` +
+        `<span style="opacity:0.6;">Chargers</span> ${o.chargers} &times; 150 kW<br/>` +
         `<span style="opacity:0.6;">Peak demand</span> ${o.demand_kw} kW<br/>` +
-        `<span style="opacity:0.6;">DSO</span> ${o.dso}<br/>` +
+        `<span style="opacity:0.6;">DSO</span> <span style="color:${DSO_HEX[o.dso] || '#fff'};">${o.dso}</span><br/>` +
         `<span style="opacity:0.6;">Nearest sub</span> ${o.nearest_sub} (${o.connection_km} km)<br/>` +
         `<span style="opacity:0.6;">Grid status</span> <span style="color:${STATUS_HEX[o.status] || '#fff'};">${o.status}</span>` +
         `</div>`,
@@ -481,6 +538,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   function render() {
     const layers = [];
 
+    // 1. Interurban corridors -- minimal translucent white underlay, same
+    //    geometry source as the ABM animation.
+    if (visible.corridors) {
+      layers.push(new deck.PathLayer({
+        id: 'corridors',
+        data: corridors,
+        getPath: d => d.path,
+        getColor: [255, 255, 255, 32],
+        getWidth: 2200,
+        widthMinPixels: 1,
+        widthMaxPixels: 3,
+        capRounded: true,
+        jointRounded: true,
+        opacity: 1,
+      }));
+    }
+
+    // 2. Substations (triangles, coloured by DSO). Small sizes so they do
+    //    not dominate the base map, matching the ABM charger dot scale.
     if (visible.subs) {
       layers.push(new deck.IconLayer({
         id: 'substations',
@@ -490,14 +566,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         getIcon: () => 'triangle',
         getPosition: d => d.position,
         getColor: d => d.color,
-        getSize: 18,
-        sizeMinPixels: 8,
-        sizeMaxPixels: 22,
+        getSize: 8,
+        sizeMinPixels: 3,
+        sizeMaxPixels: 8,
         pickable: true,
         opacity: 0.9,
       }));
     }
 
+    // 3. Existing chargers (squares, coloured by nearest-DSO -- same
+    //    palette as substations so the provider read is instant).
     if (visible.chargers) {
       layers.push(new deck.IconLayer({
         id: 'chargers',
@@ -507,14 +585,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         getIcon: () => 'square',
         getPosition: d => d.position,
         getColor: d => d.color,
-        getSize: 14,
-        sizeMinPixels: 6,
-        sizeMaxPixels: 16,
+        getSize: 7,
+        sizeMinPixels: 3,
+        sizeMaxPixels: 8,
         pickable: true,
         opacity: 0.85,
       }));
     }
 
+    // 4. Proposed stations -- pulsing green circles (same design tokens
+    //    as the ABM animation proposed markers).
     if (visible.proposed) {
       const phase = (Date.now() / 750) % (Math.PI * 2);
       const pulseScale = 1 + 0.45 * Math.sin(phase);
@@ -570,30 +650,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 
 def main() -> None:
-    print("Loading datasets…")
+    print("Loading datasets...")
     subs = load_substations()
     chargers = load_chargers()
     proposed = load_proposed()
+    corridors = load_corridors()
+    print(f"  corridors   : {len(corridors):,}")
     print(f"  substations : {len(subs):,}")
     print(f"  chargers    : {len(chargers):,}")
     print(f"  proposed    : {len(proposed):,}")
 
-    print("Joining chargers → nearest substation for grid status…")
+    print("Joining chargers -> nearest substation for DSO + status...")
     chargers = nearest_substation_status(chargers, subs)
 
-    print("Building marker records…")
+    print("Building marker records...")
     data = {
+        "corridors":   corridors,
         "substations": substation_markers(subs),
         "chargers":    charger_markers(chargers),
         "proposed":    proposed_markers(proposed),
     }
 
-    print("Encoding icon atlas…")
+    print("Encoding icon atlas...")
     atlas = make_icon_atlas()
 
-    print("Rendering HTML…")
+    print("Rendering HTML...")
     data_json = json.dumps(data, separators=(",", ":"))
-    # Escape </script> to keep the enclosing JSON script tag intact.
     data_json = data_json.replace("</script>", "<\\/script>")
     html = (
         HTML_TEMPLATE
@@ -606,6 +688,7 @@ def main() -> None:
     OUT.write_text(html)
     size_kb = OUT.stat().st_size / 1024
     print(f"\nWrote {OUT}  ({size_kb:.0f} KB)")
+    print(f"  corridors   : {len(data['corridors']):,}")
     print(f"  substations : {len(data['substations']):,}")
     print(f"  chargers    : {len(data['chargers']):,}")
     print(f"  proposed    : {len(data['proposed']):,}")
