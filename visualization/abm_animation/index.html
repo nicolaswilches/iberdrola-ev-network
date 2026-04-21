@@ -178,6 +178,20 @@
             border-radius: 4px;
             background: linear-gradient(90deg, #f87171, #fbbf24, #4ade80);
         }
+
+        .legend-pulse {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #4ade80;
+            box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7);
+            animation: pulse-ring 1.4s infinite;
+        }
+        @keyframes pulse-ring {
+            0%   { box-shadow: 0 0 0 0   rgba(74, 222, 128, 0.7); }
+            70%  { box-shadow: 0 0 0 8px rgba(74, 222, 128, 0); }
+            100% { box-shadow: 0 0 0 0   rgba(74, 222, 128, 0); }
+        }
     </style>
 </head>
 <body>
@@ -202,7 +216,7 @@
 
         <div id="time-display">
             <div class="time-label">Time of Day</div>
-            <div class="time-value" id="clock">05:00</div>
+            <div class="time-value" id="clock">00:00</div>
             <div class="date-label" id="date-label">Typical weekday, 2027</div>
         </div>
 
@@ -231,8 +245,8 @@
             <span>Existing chargers</span>
         </div>
         <div class="legend-item">
-            <div class="legend-dot" style="background: #4ade80; width: 8px; height: 8px; border: 1.5px solid #4ade80; box-sizing: border-box;"></div>
-            <span>Proposed stations (new)</span>
+            <div class="legend-pulse"></div>
+            <span>Proposed stations (blinking)</span>
         </div>
     </div>
 
@@ -310,8 +324,14 @@
             getTooltip: ({object}) => {
                 if (!object || !object.id) return null;
                 return {
-                    html: `<b>${object.id}</b><br/>Road: ${object.road}<br/>Chargers: ${object.chargers}`,
-                    style: { background: 'rgba(0,0,0,0.85)', color: '#fff', fontSize: '11px', borderRadius: '6px', padding: '8px' }
+                    html:
+                      `<div style="font-weight:600;color:#4ade80;font-size:12px;">${object.id}</div>` +
+                      `<div style="font-size:11px;opacity:0.7;margin-top:2px;">Proposed station</div>` +
+                      `<div style="font-size:11px;margin-top:6px;">` +
+                      `<span style="opacity:0.6;">Route</span> ${object.road}<br/>` +
+                      `<span style="opacity:0.6;">Chargers</span> ${object.chargers} × 150 kW` +
+                      `</div>`,
+                    style: { background: 'rgba(10,10,10,0.92)', color: '#fff', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', padding: '10px 12px', fontFamily: 'Inter, -apple-system, sans-serif' }
                 };
             }
         });
@@ -353,8 +373,10 @@
         document.getElementById('stat-charging').textContent = chargingCount.toLocaleString();
         document.getElementById('stat-completed').textContent = completedCount.toLocaleString();
 
-        // Clock: show time of day
-        const totalMin = currentTime;
+        // Clock: show time of day. Guard against non-finite (e.g. on very
+        // first frame before any data has been loaded) so the label never
+        // flashes "NaN:NaN".
+        const totalMin = Number.isFinite(currentTime) ? currentTime : SIM_START_MIN;
         const hours = Math.floor(totalMin / 60) % 24;
         const mins = Math.floor(totalMin % 60);
         document.getElementById('clock').textContent =
@@ -482,30 +504,42 @@
             opacity: 0.9,
         });
 
-        // Proposed stations — green diamond-like: outer ring + inner fill
+        // Proposed stations — green blinking marker. Design shared with
+        // bi_map.html: inner filled circle + pulsing outer ring at ~0.8Hz.
+        // The pulse is driven by wall-clock time so it continues blinking
+        // while the simulation is paused.
+        const _pulsePhase = (Date.now() / 750) % (Math.PI * 2);
+        const _pulseScale = 1 + 0.45 * Math.sin(_pulsePhase);         // 0.55x..1.45x
+        const _pulseAlpha = Math.round(80 + 100 * (0.5 + 0.5 * Math.sin(_pulsePhase))); // 80..180
+
         const proposedOuterLayer = new deck.ScatterplotLayer({
             id: 'proposed-outer',
             data: proposedData,
             getPosition: d => d.position,
             getFillColor: [0, 0, 0, 0],
-            getLineColor: [74, 222, 128, 255],
-            getRadius: 5000,
-            radiusMinPixels: 6,
-            radiusMaxPixels: 14,
+            getLineColor: [74, 222, 128, _pulseAlpha],
+            getRadius: 9000 * _pulseScale,
+            radiusMinPixels: 8,
+            radiusMaxPixels: 26,
             stroked: true,
             filled: false,
-            lineWidthMinPixels: 1.5,
+            lineWidthMinPixels: 2,
             opacity: 1,
+            updateTriggers: { getRadius: _pulsePhase, getLineColor: _pulsePhase },
         });
 
         const proposedInnerLayer = new deck.ScatterplotLayer({
             id: 'proposed-inner',
             data: proposedData,
             getPosition: d => d.position,
-            getFillColor: [74, 222, 128, 220],
-            getRadius: 3000,
-            radiusMinPixels: 3.5,
-            radiusMaxPixels: 8,
+            getFillColor: [74, 222, 128, 230],
+            getLineColor: [255, 255, 255, 200],
+            getRadius: 3500,
+            radiusMinPixels: 5,
+            radiusMaxPixels: 9,
+            stroked: true,
+            filled: true,
+            lineWidthMinPixels: 1,
             opacity: 1,
             pickable: true,
         });
@@ -516,12 +550,14 @@
     // --- Animation loop ---
     function animate(frameTime) {
         if (animationDone) {
-            updateLayers();
+            updateLayers();                     // still pulse the ring
+            requestAnimationFrame(animate);
             return;
         }
 
         if (!playing) {
             lastFrameTime = null;
+            updateLayers();                     // keep blink going while paused
             requestAnimationFrame(animate);
             return;
         }

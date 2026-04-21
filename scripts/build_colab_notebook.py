@@ -262,30 +262,34 @@ if dso_path.exists():
 else:
     print("dso_investment_summary.csv not found — run Section 4 to regenerate")
 """
-    map_cell = """# Interactive map — bi_map.html
-# Colab's cell output is itself rendered inside a sandboxed iframe, which breaks
-# HTML(filename=...) for full <html>-document payloads like Folium output. Wrap
-# it in our own srcdoc iframe — the same pattern Folium uses in _repr_html_.
+    map_cell = """# Interactive BI map — visualization/bi_map.html
+# Same deck.gl design language as the ABM animation: dark-matter basemap,
+# layer toggles, hover tooltips. Three layers:
+#   - Substations by DSO (triangles)
+#   - Existing fast chargers by nearest-substation grid status (squares)
+#   - Proposed stations (green blinking circles)
+# Colab's cell output is itself a sandboxed iframe, so we wrap the standalone
+# HTML payload in our own srcdoc iframe — same pattern Folium uses.
 from pathlib import Path as _Path
 from IPython.display import HTML, display, Markdown
 
-display(Markdown("### Static grid map (`visualization/bi_map.html`)"))
+display(Markdown("### Interactive BI map (`visualization/bi_map.html`)"))
 display(Markdown(
-    "8 proposed stations (color-coded by grid status), 8 friction points with DSO labels, "
-    "baseline fast-charger layer toggleable. Sourced from post-ABM `proposed_stations.csv`."
+    "2,147 substations, 3,246 existing fast chargers, and the 8 proposed stations. "
+    "Hover any marker for grid/DSO/charger metadata. Toggle layers from the left panel. "
+    "Proposed stations blink and share the same design used in the ABM animation below."
 ))
 
 _bi_map = _Path('visualization/bi_map.html')
 if _bi_map.exists():
-    # Only escape the attribute delimiter + ampersands, matching folium.
     _html_src = _bi_map.read_text()
-    _srcdoc = _html_src.replace('&', '&amp;').replace('"', '&quot;')
+    _srcdoc = _html_src.replace('&', '&amp;').replace('\"', '&quot;')
     display(HTML(
-        f'<iframe srcdoc="{_srcdoc}" width="100%" height="700" '
-        f'style="border:0; border-radius:8px;"></iframe>'
+        f'<iframe srcdoc=\"{_srcdoc}\" width=\"100%\" height=\"720\" '
+        f'sandbox=\"allow-scripts\" style=\"border:0; border-radius:8px;\"></iframe>'
     ))
 else:
-    print(f"WARNING: {_bi_map} not found. Run Section 4.11 (NB10) to regenerate.")
+    print(f\"WARNING: {_bi_map} not found. Run scripts/build_bi_map.py to regenerate.\")
 """
     abm_anim = """# Interactive ABM animation — visualization/abm_animation/index.html
 # Colab's output cell is a sandboxed iframe, so a nested IFrame with a
