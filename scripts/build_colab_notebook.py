@@ -423,15 +423,22 @@ here. Content is identical to the repo at commit `{sha}`.
 # -----------------------------------------------------------------------------
 
 def section_4() -> list[nbformat.NotebookNode]:
-    intro = """# Section 4 — Core pipeline (NB01 → NB10)
+    intro = """# Section 4 — Core pipeline (NB01 → NB10) + ABM feedback bridge
 
 Each subsection corresponds to one pipeline notebook from the repo. Code cells
 are merged into a single Python block per notebook, wrapped in
 `if RUN_FULL_PIPELINE:` so the whole section can be toggled from Section 0.4.
 Markdown cells from the original notebooks are kept inline as narrative.
 
-**Execution order: NB01 → NB03 → NB04 → NB05 → NB06 → NB07 → NB08 → NB09 → NB10.**
-NB02 is reference-only (the SARIMA output is locked in `constants.py`).
+**Execution order:**
+NB01 → NB03 → NB04 → NB05 → NB06 → NB07 → **ABM feedback loop (4.8)** → NB08 → NB09 → NB10.
+
+The ABM feedback step is wedged between NB07 and NB08 on purpose: NB07 writes
+`proposed_stations.csv` with 26 chargers (pre-ABM), and when
+`RUN_ABM_FEEDBACK=True` the loop rewrites that file to 28 chargers before
+NB08/09/10 consume it. With both flags True the pipeline reproduces the
+committed submission exactly. NB02 is reference-only (SARIMA output is locked
+in `constants.py`).
 """
     out: list[nbformat.NotebookNode] = [md(intro, section="4.0")]
 
@@ -465,18 +472,70 @@ NB02 is reference-only (the SARIMA output is locked in `constants.py`).
     nb02 = NOTEBOOKS / "02_ev_projection_fork.ipynb"
     out += inline_notebook(nb02, section="4.2", gate="RUN_FULL_PIPELINE and RUN_NB02")
 
-    # 4.3–4.10 — NB03..NB10 (all gated on RUN_FULL_PIPELINE)
-    pipeline = [
+    # 4.3–4.7 — NB03..NB07 (pre-ABM; gated on RUN_FULL_PIPELINE)
+    pre_abm = [
         ("4.3", "NB03 Road Network Analysis", "03_road_network_analysis.ipynb"),
         ("4.4", "NB04 Existing Chargers Baseline (AFIR gap detection)", "04_existing_chargers_baseline.ipynb"),
         ("4.5", "NB05 Grid Capacity Consolidation", "05_grid_capacity_consolidation.ipynb"),
         ("4.6", "NB06 Demand Modeling (authoritative)", "06_demand_modeling.ipynb"),
         ("4.7", "NB07 Network Optimization", "07_network_optimization.ipynb"),
-        ("4.8", "NB08 Grid Viability & Friction", "08_grid_viability_friction.ipynb"),
-        ("4.9", "NB09 Output Generation (File_1/2/3)", "09_output_generation.ipynb"),
-        ("4.10", "NB10 Visualization Export (bi_map.html)", "10_visualization_export.ipynb"),
     ]
-    for sec, title, fname in pipeline:
+    for sec, title, fname in pre_abm:
+        out.append(md(f"## {sec} — {title}\n\n*Source:* `notebooks/{fname}`", section=sec))
+        nb_path = NOTEBOOKS / fname
+        out += inline_notebook(nb_path, section=sec, gate="RUN_FULL_PIPELINE")
+
+    # 4.8 — ABM → LP feedback bridge (runs between NB07 and NB08)
+    abm_intro = """## 4.8 — ABM → LP feedback loop (bridge step)
+
+NB07's greedy placer writes `data/processed/proposed_stations.csv` with a
+pre-ABM sizing of **26 chargers** — it satisfies AFIR but cannot observe queue
+dynamics. The feedback loop (`src/new-abm/feedback_loop.py`) reads that file,
+runs an ABM iteration against the 8 proposed stations, and adjusts
+`n_chargers_proposed` within the NB07 regulatory caps
+(`MAX_CHARGERS_HIGH_TRAFFIC=12`, `MAX_CHARGERS_STANDARD=8`).
+
+On the `new-abm` branch the loop converged in 2 effective iterations, raising
+**STA_0003 (AP-2) from 4 → 6 connectors** (total 26 → 28). The tuned file is
+then consumed by NB08/09/10 below.
+
+Gated on `RUN_ABM_FEEDBACK`. When False, NB08/09/10 consume whatever
+`proposed_stations.csv` currently holds — 26 after a fresh NB07 run, or 28
+from the committed repo state if NB07 did not run. The full `src/new-abm/`
+package source and the committed iteration evidence are shown in Section 5.
+"""
+    abm_cell = """# ABM feedback loop — rewrites proposed_stations.csv with queue-aware charger counts
+if RUN_ABM_FEEDBACK:
+    import subprocess
+    print("Running ABM feedback loop (3 iterations, 25k agents). ~20 min on Colab CPU.")
+    rc = subprocess.run(
+        [sys.executable, 'src/new-abm/feedback_loop.py', '--agents', '25000', '--max-iters', '3'],
+        cwd=str(REPO),
+        check=False,
+    )
+    print(f"Exit code: {rc.returncode}")
+    if rc.returncode == 0:
+        import pandas as pd
+        _tuned = pd.read_csv('data/processed/proposed_stations.csv')
+        print(f"Post-ABM total chargers: {_tuned['n_chargers_proposed'].sum()}")
+else:
+    print("ABM feedback loop skipped (RUN_ABM_FEEDBACK=False).")
+    if RUN_FULL_PIPELINE:
+        print("⚠️  NB07 ran just above and wrote 26 chargers. NB08/09/10 will use that.")
+        print("   Set RUN_ABM_FEEDBACK=True to reach the committed 28-charger submission.")
+    else:
+        print("Committed proposed_stations.csv (28 chargers) remains in place for NB08/09/10 (also skipped).")
+"""
+    out.append(md(abm_intro, section="4.8"))
+    out.append(code(abm_cell, section="4.8", origin="src/new-abm/feedback_loop.py"))
+
+    # 4.9–4.11 — NB08..NB10 (post-ABM; gated on RUN_FULL_PIPELINE)
+    post_abm = [
+        ("4.9",  "NB08 Grid Viability & Friction",          "08_grid_viability_friction.ipynb"),
+        ("4.10", "NB09 Output Generation (File_1/2/3)",     "09_output_generation.ipynb"),
+        ("4.11", "NB10 Visualization Export (bi_map.html)", "10_visualization_export.ipynb"),
+    ]
+    for sec, title, fname in post_abm:
         out.append(md(f"## {sec} — {title}\n\n*Source:* `notebooks/{fname}`", section=sec))
         nb_path = NOTEBOOKS / fname
         out += inline_notebook(nb_path, section=sec, gate="RUN_FULL_PIPELINE")
@@ -489,23 +548,25 @@ NB02 is reference-only (the SARIMA output is locked in `constants.py`).
 # -----------------------------------------------------------------------------
 
 def section_5() -> list[nbformat.NotebookNode]:
-    intro = """# Section 5 — ABM → LP feedback loop (`src/new-abm/`)
+    intro = """# Section 5 — ABM feedback loop (`src/new-abm/` audit)
 
-The Level-1 feedback loop reads observed peak queues from an ABM baseline run,
-adjusts each station's `n_chargers_proposed` within the NB07 regulatory caps
-(`MAX_CHARGERS_HIGH_TRAFFIC=12`, `MAX_CHARGERS_STANDARD=8`), and re-runs the
-ABM. The loop stops when no station is adjusted, or after 3 iterations.
+The loop's **execution step lives in Section 4.8** (between NB07 and NB08),
+so that when `RUN_FULL_PIPELINE=True + RUN_ABM_FEEDBACK=True` the tuned
+`proposed_stations.csv` flows correctly into NB08/09/10 and the final
+`File_1/2/3` match the committed 28-charger submission.
 
-**Rule:** add 1 connector per 30 peak-queue units above a target of 20.
+This section (5) is audit-only: it materializes the full `src/new-abm/`
+package tree for inline inspection and displays the committed feedback-loop
+evidence (per-iteration outputs and the convergence log) **without
+re-executing anything** — re-execution is controlled by the flag in 0.4 and
+happens up in 4.8.
 
-**Result on the `new-abm` branch:** the loop converged in 2 effective iterations.
-`STA_0003` (AP-2, high-IMD TEN-T Core) was raised from 4 → 6 connectors. All
-other stations were already correctly sized by NB07. The final tuned
-`proposed_stations.csv` drives `File_2.csv` in Section 1.
-
-Every file under `src/new-abm/` is materialized below via `%%writefile` cells
-(directory walk, including YAML configs). Re-execution of the loop is gated on
-`RUN_ABM_FEEDBACK`.
+**Rule (documented here for reference):** add 1 connector per 30 peak-queue
+units above a target of 20, capped at `MAX_CHARGERS_HIGH_TRAFFIC=12` /
+`MAX_CHARGERS_STANDARD=8` per NB07. On the `new-abm` branch the loop
+converged in 2 effective iterations, raising `STA_0003` (AP-2, high-IMD
+TEN-T Core) from 4 → 6 connectors; all other stations were already correctly
+sized by NB07.
 """
     out: list[nbformat.NotebookNode] = [md(intro, section="5.0")]
 
@@ -546,24 +607,6 @@ for d in sorted(loop_dir.glob('iter_*')):
 """
     out.append(md("## 5.2 — Committed feedback loop evidence", section="5.2"))
     out.append(code(display_cell, section="5.2"))
-
-    # 5.3 — Optional re-execution, gated on RUN_ABM_FEEDBACK
-    rerun_cell = """# Re-execute the feedback loop (disabled by default — results are already committed)
-if RUN_ABM_FEEDBACK:
-    import subprocess
-    print("Running feedback loop (3 iterations, 25k agents)...")
-    rc = subprocess.run(
-        [sys.executable, 'src/new-abm/feedback_loop.py', '--agents', '25000', '--max-iters', '3'],
-        cwd=str(REPO),
-        check=False,
-    )
-    print(f"Exit code: {rc.returncode}")
-else:
-    print("ABM feedback loop skipped (RUN_ABM_FEEDBACK=False).")
-    print("Committed results in src/new-abm/feedback_loop/ shown above.")
-"""
-    out.append(md("## 5.3 — Optional re-execution", section="5.3"))
-    out.append(code(rerun_cell, section="5.3"))
 
     return out
 
