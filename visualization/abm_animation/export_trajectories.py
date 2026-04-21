@@ -192,14 +192,28 @@ def _load_road_geometries(data_dir: Path) -> Dict[str, LineString]:
     road_geoms: Dict[str, LineString] = {}
     for road_name, grp in df.groupby("Carretera"):
         grp_sorted = grp.sort_values("PK_inicio")
-        geoms = grp_sorted["geometry"].tolist()
-        merged = linemerge(unary_union(geoms))
-        if merged.geom_type == "MultiLineString":
-            # Pick the longest component
-            longest = max(merged.geoms, key=lambda g: g.length)
-            road_geoms[road_name] = longest
-        elif merged.geom_type == "LineString":
-            road_geoms[road_name] = merged
+        geoms = [g for g in grp_sorted["geometry"].tolist() if g is not None and not g.is_empty]
+        if not geoms:
+            continue
+        try:
+            union = unary_union(geoms)
+            if union.geom_type == "LineString":
+                road_geoms[road_name] = union
+            elif union.geom_type == "MultiLineString":
+                try:
+                    merged = linemerge(union)
+                except Exception:
+                    merged = union
+                if merged.geom_type == "LineString":
+                    road_geoms[road_name] = merged
+                elif merged.geom_type == "MultiLineString":
+                    road_geoms[road_name] = max(merged.geoms, key=lambda g: g.length)
+            elif union.geom_type == "GeometryCollection":
+                lines = [g for g in union.geoms if g.geom_type == "LineString"]
+                if lines:
+                    road_geoms[road_name] = max(lines, key=lambda g: g.length)
+        except Exception as e:
+            print(f"  Warning: could not merge {road_name}: {e}")
 
     print(f"  Loaded real geometries for {len(road_geoms)} roads")
     return road_geoms
@@ -494,7 +508,7 @@ def export_trajectories(
             trip_line = LineString(list(trip_line.coords)[::-1])
 
         # Simplify for per-trip resolution (less aggressive than corridor display)
-        trip_line_simple = trip_line.simplify(0.002, preserve_topology=True)
+        trip_line_simple = trip_line.simplify(0.0015, preserve_topology=True)
         if trip_line_simple.is_empty or len(list(trip_line_simple.coords)) < 2:
             trip_line_simple = trip_line
 

@@ -226,6 +226,10 @@
             <div class="legend-line" style="background: rgba(74, 222, 128, 0.25);"></div>
             <span>Interurban corridors</span>
         </div>
+        <div class="legend-item">
+            <div class="legend-dot" style="background: #60a5fa; width: 6px; height: 6px;"></div>
+            <span>Charging stations</span>
+        </div>
     </div>
 
     <script>
@@ -242,6 +246,7 @@
     let speed = 1;
     let tripData = [];
     let corridorData = [];
+    let chargerData = [];
     let deckgl = null;
     let lastFrameTime = null;
     let animationDone = false;
@@ -273,7 +278,7 @@
         .then(data => {
             tripData = data.trips;
             corridorData = data.corridors || [];
-            // Start from 5am (300 min) where trips begin, but display clock from 0:00
+            chargerData = data.chargers || [];
             animationTime = SIM_START_MIN;
             initDeck();
             animate();
@@ -452,7 +457,19 @@
             opacity: 0.8,
         });
 
-        deckgl.setProps({ layers: [corridorLayer, tripsLayer, headsLayer, pulseLayer] });
+        // Charger locations (blue dots, smaller than vehicle heads)
+        const chargersLayer = new deck.ScatterplotLayer({
+            id: 'chargers',
+            data: chargerData,
+            getPosition: d => d.position,
+            getFillColor: [96, 165, 250, 180],
+            getRadius: 1200,
+            radiusMinPixels: 1.5,
+            radiusMaxPixels: 3,
+            opacity: 0.9,
+        });
+
+        deckgl.setProps({ layers: [corridorLayer, chargersLayer, tripsLayer, headsLayer, pulseLayer] });
     }
 
     // --- Animation loop ---
