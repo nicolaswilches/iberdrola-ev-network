@@ -263,9 +263,61 @@ else:
     print("dso_investment_summary.csv not found — run Section 4 to regenerate")
 """
     map_cell = """# Interactive map — bi_map.html
-from IPython.display import IFrame, display, Markdown
-display(Markdown("### Interactive Map (`visualization/bi_map.html`)"))
-display(IFrame(src='visualization/bi_map.html', width='100%', height=700))
+# Uses HTML(filename=...) so the map renders directly in Colab output
+# (IFrame with a relative src doesn't resolve inside Colab's sandboxed output frame).
+from pathlib import Path as _Path
+from IPython.display import HTML, display, Markdown
+
+display(Markdown("### Static grid map (`visualization/bi_map.html`)"))
+display(Markdown(
+    "8 proposed stations (color-coded by grid status), 8 friction points with DSO labels, "
+    "baseline fast-charger layer toggleable. Sourced from post-ABM `proposed_stations.csv`."
+))
+
+_bi_map = _Path('visualization/bi_map.html')
+if _bi_map.exists():
+    display(HTML(filename=str(_bi_map)))
+else:
+    print(f"WARNING: {_bi_map} not found. Run Section 4.11 (NB10) to regenerate.")
+"""
+    abm_anim = """# Interactive ABM animation — visualization/abm_animation/index.html
+# Embeds a deck.gl + maplibre animation of the 25k-agent ABM run (2000-trip sample
+# for browser performance). Uses srcdoc iframe with trajectories.json injected
+# inline, because Colab's output sandbox blocks relative fetch() calls.
+import html as _html_escape
+from pathlib import Path as _Path
+from IPython.display import HTML, display, Markdown
+
+display(Markdown("### ABM trip simulation — 25k agents, 64 corridors"))
+display(Markdown(
+    "Source run: `src/new-abm/feedback_loop/iter_02/` (final converged 25k-agent iteration). "
+    "Displayed: 2000-trip browser-friendly sample; battery SOC color gradient (red→amber→green); "
+    "charging pauses show as stationary dots with blue pulsing rings; "
+    "all 64 corridors that the ABM operates on (Level 2b auto-build). "
+    "Covers 24h of simulation in 45s of playback."
+))
+
+_anim_html = _Path('visualization/abm_animation/index.html')
+_anim_data = _Path('visualization/abm_animation/trajectories.json')
+
+if _anim_html.exists() and _anim_data.exists():
+    _raw = _anim_html.read_text()
+    _traj = _anim_data.read_text()
+    # Inline the JSON so the iframe doesn't need to fetch() across origins.
+    _raw = _raw.replace(
+        "fetch(DATA_URL)",
+        "Promise.resolve({json: () => (" + _traj + ")})"
+    )
+    _srcdoc = _html_escape.escape(_raw, quote=True)
+    display(HTML(
+        f'<iframe srcdoc="{_srcdoc}" width="100%" height="700" '
+        f'style="border:0; background:#0a0a0a; border-radius:8px;" '
+        f'sandbox="allow-scripts allow-same-origin"></iframe>'
+    ))
+else:
+    print(f"WARNING: animation assets not found "
+          f"({_anim_html.exists()=}, {_anim_data.exists()=}). "
+          f"Run visualization/abm_animation/export_trajectories.py to regenerate.")
 """
     kpis = """# Executive KPI summary
 kpi_md = f'''
@@ -339,6 +391,8 @@ print(f"Total: {sum(p for _, p in checks)}/{len(checks)} {'PASS' if all_pass els
         code(dso, section="1.4"),
         md("## 1.5 — Interactive map", section="1.5"),
         code(map_cell, section="1.5"),
+        md("## 1.5b — ABM trip simulation", section="1.5b"),
+        code(abm_anim, section="1.5b"),
         md("## 1.6 — KPI summary", section="1.6"),
         code(kpis, section="1.6"),
         md("## 1.7 — Compliance checklist", section="1.7"),

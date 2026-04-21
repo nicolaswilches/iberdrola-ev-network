@@ -173,15 +173,24 @@ def _segment_distance(n1: str, n2: str) -> float:
 # Real road geometry loading
 # ---------------------------------------------------------------------------
 
-def _load_road_geometries(data_dir: Path) -> Dict[str, LineString]:
+def _load_road_geometries(
+    data_dir: Path,
+) -> Tuple[Dict[str, object], Dict[str, LineString]]:
     """
-    Load road geometries from roads_clean.parquet and merge segments per road
-    into single LineStrings. Returns {road_name: merged_linestring}.
+    Load road geometries from roads_clean.parquet and merge segments per road.
+
+    Returns two dicts:
+      - full_geoms: full merged geometry (may be MultiLineString). Used for
+        city-proximity / distance checks so auto-detected corridors match
+        the ABM's `_build_road_corridors` logic exactly.
+      - display_lines: single LineString per road (longest component if the
+        merged geom is a MultiLineString). Used for polyline rendering and
+        agent routing, which both need a single ordered line.
     """
     parquet_path = data_dir / "roads_clean.parquet"
     if not parquet_path.exists():
         print(f"WARNING: {parquet_path} not found, falling back to straight lines")
-        return {}
+        return {}, {}
 
     df = pd.read_parquet(parquet_path, engine="fastparquet")
     df["geometry"] = df["geometry"].apply(
@@ -189,7 +198,8 @@ def _load_road_geometries(data_dir: Path) -> Dict[str, LineString]:
     )
     df = df.dropna(subset=["geometry"])
 
-    road_geoms: Dict[str, LineString] = {}
+    full_geoms: Dict[str, object] = {}
+    display_lines: Dict[str, LineString] = {}
     for road_name, grp in df.groupby("Carretera"):
         grp_sorted = grp.sort_values("PK_inicio")
         geoms = [g for g in grp_sorted["geometry"].tolist() if g is not None and not g.is_empty]
@@ -198,25 +208,28 @@ def _load_road_geometries(data_dir: Path) -> Dict[str, LineString]:
         try:
             union = unary_union(geoms)
             if union.geom_type == "LineString":
-                road_geoms[road_name] = union
+                full_geoms[road_name] = union
+                display_lines[road_name] = union
             elif union.geom_type == "MultiLineString":
                 try:
                     merged = linemerge(union)
                 except Exception:
                     merged = union
+                full_geoms[road_name] = merged
                 if merged.geom_type == "LineString":
-                    road_geoms[road_name] = merged
+                    display_lines[road_name] = merged
                 elif merged.geom_type == "MultiLineString":
-                    road_geoms[road_name] = max(merged.geoms, key=lambda g: g.length)
+                    display_lines[road_name] = max(merged.geoms, key=lambda g: g.length)
             elif union.geom_type == "GeometryCollection":
                 lines = [g for g in union.geoms if g.geom_type == "LineString"]
                 if lines:
-                    road_geoms[road_name] = max(lines, key=lambda g: g.length)
+                    full_geoms[road_name] = union
+                    display_lines[road_name] = max(lines, key=lambda g: g.length)
         except Exception as e:
             print(f"  Warning: could not merge {road_name}: {e}")
 
-    print(f"  Loaded real geometries for {len(road_geoms)} roads")
-    return road_geoms
+    print(f"  Loaded real geometries for {len(display_lines)} roads")
+    return full_geoms, display_lines
 
 
 def _extend_line_to_cities(
@@ -291,66 +304,116 @@ def _simplify_line(line: LineString, tolerance: float = 0.005) -> List[List[floa
     return [[round(x, 4), round(y, 4)] for x, y in simplified.coords]
 
 
+_AUTO_BUFFER_KM = 25.0
+_AUTO_UTM_EPSG = 25830  # Spain
+
+
 def _build_real_corridor_polylines(
-    road_geoms: Dict[str, LineString],
-    used_roads: Optional[set] = None,
+    full_geoms: Dict[str, object],
+    display_lines: Dict[str, LineString],
 ) -> Tuple[List[dict], Dict[str, LineString]]:
     """
-    Build corridor polylines from real geometry for display AND for agent routing.
+    Build corridor polylines for display AND for agent routing.
 
-    Only corridors in *used_roads* (if given) are included in the display list.
-    All corridors get a routing line regardless.
+    Display list mirrors the ABM's `_build_road_corridors` in
+    `spanish_network.py`: every hand-curated road in `_ROAD_CORRIDORS` plus
+    every parquet road with ≥2 `_CITY_COORDS` within 25 km. Parallel routes
+    (e.g. AP-2 and A-2) both appear — same as the ABM.
+
+    Agent routing still resolves via `_ROAD_CORRIDORS` (the 32 city-chain
+    corridors), so parallel roads share a single routing line.
 
     Returns:
       - corridors: list of {"road": name, "path": [[lon,lat],...]} for deck.gl
       - corridor_lines: {road_name: extended+oriented LineString} for agent routing
     """
-    seen_city_chains = set()
-    corridors = []
+    corridors: List[dict] = []
     corridor_lines: Dict[str, LineString] = {}
+    seen_city_chains: Dict[Tuple[str, ...], str] = {}
 
+    # Hand-curated corridors (city-chain indexed)
     for road_name, city_chain in _ROAD_CORRIDORS.items():
         chain_key = tuple(city_chain)
         rev_key = tuple(reversed(city_chain))
-        if chain_key in seen_city_chains or rev_key in seen_city_chains:
-            # Share the geometry with the already-processed parallel corridor
-            for seen_road in corridor_lines:
-                seen_chain = _ROAD_CORRIDORS.get(seen_road, [])
-                if tuple(seen_chain) == chain_key or tuple(reversed(seen_chain)) == chain_key:
-                    corridor_lines[road_name] = corridor_lines[seen_road]
-                    break
-            continue
-        seen_city_chains.add(chain_key)
 
-        # Find geometry: try exact name, then fallbacks
-        geom = road_geoms.get(road_name)
-        if geom is None:
-            fallback = _ROAD_FALLBACKS.get(road_name)
-            if fallback:
-                geom = road_geoms.get(fallback)
+        # Routing line: share across parallel corridors so trips get one line
+        if chain_key in seen_city_chains:
+            corridor_lines[road_name] = corridor_lines[seen_city_chains[chain_key]]
+        elif rev_key in seen_city_chains:
+            corridor_lines[road_name] = corridor_lines[seen_city_chains[rev_key]]
+        else:
+            geom = display_lines.get(road_name)
+            if geom is None:
+                fallback = _ROAD_FALLBACKS.get(road_name)
+                if fallback:
+                    geom = display_lines.get(fallback)
+            if geom is None:
+                coords = []
+                for city in city_chain:
+                    if city in _CITY_COORDS:
+                        lat, lon = _CITY_COORDS[city]
+                        coords.append((lon, lat))
+                if len(coords) >= 2:
+                    geom = LineString(coords)
+            if geom is None or geom.is_empty:
+                continue
+            extended = _extend_line_to_cities(geom, city_chain)
+            corridor_lines[road_name] = extended
+            seen_city_chains[chain_key] = road_name
 
-        if geom is None:
-            # Pure fallback: straight lines between cities
-            coords = []
-            for city in city_chain:
-                if city in _CITY_COORDS:
-                    lat, lon = _CITY_COORDS[city]
-                    coords.append((lon, lat))
-            if len(coords) >= 2:
-                geom = LineString(coords)
-
-        if geom is None or geom.is_empty:
-            continue
-
-        # Extend to cover full corridor
-        extended = _extend_line_to_cities(geom, city_chain)
-        corridor_lines[road_name] = extended
-
-        # Only include in display if the road carries ABM traffic
-        if used_roads is None or road_name in used_roads:
-            path = _simplify_line(extended, tolerance=0.003)
+        # Display line: every hand-curated road shown (no parallel dedup)
+        display_geom = corridor_lines.get(road_name)
+        if display_geom is not None and not display_geom.is_empty:
+            path = _simplify_line(display_geom, tolerance=0.003)
             if len(path) >= 2:
                 corridors.append({"road": road_name, "path": path})
+
+    # Auto-detected corridors: parquet roads not in _ROAD_CORRIDORS with
+    # ≥2 cities within 25 km. Mirrors the ABM's _build_road_corridors.
+    cities_gdf = gpd.GeoDataFrame(
+        {"city": list(_CITY_COORDS.keys())},
+        geometry=[Point(lon, lat) for lat, lon in _CITY_COORDS.values()],
+        crs="EPSG:4326",
+    ).to_crs(epsg=_AUTO_UTM_EPSG)
+    city_pts_utm: Dict[str, Point] = dict(zip(cities_gdf["city"], cities_gdf.geometry))
+    buffer_m = _AUTO_BUFFER_KM * 1000
+
+    for road_name in sorted(full_geoms.keys()):
+        if road_name in _ROAD_CORRIDORS:
+            continue
+        full_geom = full_geoms[road_name]
+        display_geom = display_lines.get(road_name)
+        if display_geom is None:
+            continue
+
+        full_utm = gpd.GeoSeries([full_geom], crs="EPSG:4326").to_crs(
+            epsg=_AUTO_UTM_EPSG
+        ).iloc[0]
+
+        nearby: List[Tuple[float, str]] = []
+        for city, pt_utm in city_pts_utm.items():
+            if full_utm.distance(pt_utm) <= buffer_m:
+                nearby.append((full_utm.project(pt_utm), city))
+
+        if len(nearby) < 2:
+            continue
+
+        nearby.sort(key=lambda x: x[0])
+        path = _simplify_line(display_geom, tolerance=0.003)
+        if len(path) < 2:
+            continue
+
+        # Orient start → first nearby city (bbox-diagonal ordering)
+        first_city = nearby[0][1]
+        lat_f, lon_f = _CITY_COORDS[first_city]
+        start = path[0]
+        end = path[-1]
+        d_start = (start[0] - lon_f) ** 2 + (start[1] - lat_f) ** 2
+        d_end = (end[0] - lon_f) ** 2 + (end[1] - lat_f) ** 2
+        if d_start > d_end:
+            path = path[::-1]
+
+        corridors.append({"road": road_name, "path": path})
 
     return corridors, corridor_lines
 
@@ -496,42 +559,19 @@ def export_trajectories(
 ) -> dict:
     """Export trajectories with real road geometry, SOC, charging pauses, and chargers."""
     print("Loading road geometries...")
-    road_geoms = _load_road_geometries(data_dir)
+    full_geoms, display_lines = _load_road_geometries(data_dir)
 
     print("Loading charger locations...")
     chargers, proposed_stations = _load_charger_locations(data_dir)
     print(f"  {len(chargers)} existing chargers, {len(proposed_stations)} proposed stations")
 
-    # Determine which corridor roads are actually used by ABM trips
-    print("Determining used corridors...")
     trips_df = pd.read_csv(run_dir / "baseline_trip_records.csv")
     charge_df = pd.read_csv(run_dir / "baseline_charge_events.csv")
     completed = trips_df[trips_df["status"] == "completed"].copy()
 
-    # Quick scan: build dummy lines to figure out which roads carry traffic
-    dummy_lines = {road: LineString([(0, 0), (1, 1)]) for road in _ROAD_CORRIDORS}
-    used_roads: set = set()
-    for _, row in completed.iterrows():
-        result = _get_corridor_line_for_trip(row["origin"], row["destination"], dummy_lines)
-        if result:
-            used_roads.add(result[0])
-    used_roads.discard("multi")
-    # Add the primary road for multi-hop legs (via MAD)
-    for _, row in completed.iterrows():
-        o = row["origin"].split("_")[0] if "_" in row["origin"] else row["origin"]
-        d = row["destination"].split("_")[0] if "_" in row["destination"] else row["destination"]
-        if o != "MAD" and d != "MAD":
-            for mid in ["MAD"]:
-                r1 = _get_corridor_line_for_trip(o, mid, dummy_lines)
-                r2 = _get_corridor_line_for_trip(mid, d, dummy_lines)
-                if r1:
-                    used_roads.add(r1[0])
-                if r2:
-                    used_roads.add(r2[0])
-    print(f"  {len(used_roads)} corridors carry ABM traffic: {sorted(used_roads)}")
-
-    print("Building corridor polylines...")
-    corridors, corridor_lines = _build_real_corridor_polylines(road_geoms, used_roads=used_roads)
+    print("Building corridor polylines (full ABM set: hand-curated + auto-detected)...")
+    corridors, corridor_lines = _build_real_corridor_polylines(full_geoms, display_lines)
+    print(f"  {len(corridors)} corridors displayed")
 
     print("Processing trip data...")
     if len(completed) > max_agents:
@@ -690,6 +730,8 @@ def export_trajectories(
             float(max(all_arrs)) if all_arrs else 1440,
         ],
         "source_run": str(run_dir),
+        "source_agents": int(trips_df["agent_id"].nunique()),
+        "corridor_count": len(corridors),
     }
 
     output = {
