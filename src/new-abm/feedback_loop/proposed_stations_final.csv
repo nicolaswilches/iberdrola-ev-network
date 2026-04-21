@@ -1,8 +1,8 @@
 location_id,latitude,longitude,route_segment,n_chargers_proposed,source_segment_id,route_component_id,placement_km,gap_spacing_threshold_km,source_gap_length_km,tent_tier,is_tent
 STA_0001,38.775545,-2.446657,N-322,4,1002,N-322__component_01,92.45,100.0,127.02,comprehensive,True
 STA_0002,37.900207,-6.644477,N-433,4,458,N-433__component_01,60.0,100.0,120.01,comprehensive,True
-STA_0003,41.512416,-0.068422,AP-2,8,840,AP-2__component_01,58.08,60.0,103.01,core,True
-STA_0004,40.455491,-1.232499,A-23,8,25,A-23__component_01,130.87,60.0,77.2,core,True
+STA_0003,41.512416,-0.068422,AP-2,6,840,AP-2__component_01,58.08,60.0,103.01,core,True
+STA_0004,40.455491,-1.232499,A-23,4,25,A-23__component_01,130.87,60.0,77.2,core,True
 STA_0005,37.82396,-6.716242,N-435,2,460,N-435__component_01,122.99,120.0,149.27,none,False
 STA_0006,43.069502,-4.755363,N-621,2,544,N-621__component_01,64.62,120.0,129.23,none,False
 STA_0007,38.695176,-4.919327,N-502,2,474,N-502__component_02,64.41,120.0,128.82,none,False

@@ -56,6 +56,10 @@ data/raw/dgt_registrations/**/vehiculos/
 # Feedback loop runtime backups
 data/processed/proposed_stations.backup.csv
 
+# Claude session notes (local only, not for commit)
+.claude-session.md
+.claude-notes/
+
 # IDE
 .idea/
 .vscode/

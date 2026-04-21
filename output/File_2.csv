@@ -1,7 +1,7 @@
 location_id,latitude,longitude,route_segment,n_chargers_proposed,grid_status
 STA_0001,38.775545,-2.446657,N-322,4,Congested
 STA_0002,37.900207,-6.644477,N-433,4,Congested
-STA_0003,41.512416,-0.068422,AP-2,4,Congested
+STA_0003,41.512416,-0.068422,AP-2,6,Congested
 STA_0004,40.455491,-1.232499,A-23,4,Congested
 STA_0005,37.82396,-6.716242,N-435,2,Congested
 STA_0006,43.069502,-4.755363,N-621,2,Congested

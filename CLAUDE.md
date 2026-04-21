@@ -111,3 +111,15 @@ Notebooks 01–05 are fully implemented and executed. NB06–NB08 are implemente
 - `references/glossary.md` — 62 domain-specific terms (AFIR, TEN-T, DSO, IMD, NAP, etc.)
 - `references/sources.md` — All data sources with URLs and local file paths
 - `references/data_gap_audit.md` — Known data gaps and mitigation strategies
+
+---
+
+## Session Context (keep short; every line adds to every session's token cost)
+
+**Submission (2026-04-21):** 8 stations on N-322, N-433, AP-2, A-23, N-435, N-621, N-502, AP-9. 26 chargers / 3.9 MW. Baseline 3,246 fast chargers. Latest ABM: 98.4% strict, 98.6% resolved.
+
+**Feedback loop** (`src/new-abm/feedback_loop.py`) converges recommending STA_0003 go 4 → 6 chargers under Nachi's current ABM. Not yet applied to File_1/2/3.
+
+**Quote consistently:** AFIR 60/100 km is legal (Core/Comprehensive); 120 km general is project assumption. 25 km substation match is modeling, not AFIR. EV penetration 7.14% in code (2,498,159/35M). AP-X and A-X are separate roads.
+
+**Ignored runtime files:** `data/processed/proposed_stations.backup.csv`, `.claude-session.md`, `.claude-notes/`.
