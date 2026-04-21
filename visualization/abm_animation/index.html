@@ -228,7 +228,11 @@
         </div>
         <div class="legend-item">
             <div class="legend-dot" style="background: #60a5fa; width: 6px; height: 6px;"></div>
-            <span>Charging stations</span>
+            <span>Existing chargers</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-dot" style="background: #4ade80; width: 8px; height: 8px; border: 1.5px solid #4ade80; box-sizing: border-box;"></div>
+            <span>Proposed stations (new)</span>
         </div>
     </div>
 
@@ -247,6 +251,7 @@
     let tripData = [];
     let corridorData = [];
     let chargerData = [];
+    let proposedData = [];
     let deckgl = null;
     let lastFrameTime = null;
     let animationDone = false;
@@ -279,6 +284,7 @@
             tripData = data.trips;
             corridorData = data.corridors || [];
             chargerData = data.chargers || [];
+            proposedData = data.proposed || [];
             animationTime = SIM_START_MIN;
             initDeck();
             animate();
@@ -301,6 +307,13 @@
                 bearing: 0,
             },
             controller: true,
+            getTooltip: ({object}) => {
+                if (!object || !object.id) return null;
+                return {
+                    html: `<b>${object.id}</b><br/>Road: ${object.road}<br/>Chargers: ${object.chargers}`,
+                    style: { background: 'rgba(0,0,0,0.85)', color: '#fff', fontSize: '11px', borderRadius: '6px', padding: '8px' }
+                };
+            }
         });
     }
 
@@ -457,7 +470,7 @@
             opacity: 0.8,
         });
 
-        // Charger locations (blue dots, smaller than vehicle heads)
+        // Existing charger locations (blue dots, smaller than vehicle heads)
         const chargersLayer = new deck.ScatterplotLayer({
             id: 'chargers',
             data: chargerData,
@@ -469,7 +482,35 @@
             opacity: 0.9,
         });
 
-        deckgl.setProps({ layers: [corridorLayer, chargersLayer, tripsLayer, headsLayer, pulseLayer] });
+        // Proposed stations — green diamond-like: outer ring + inner fill
+        const proposedOuterLayer = new deck.ScatterplotLayer({
+            id: 'proposed-outer',
+            data: proposedData,
+            getPosition: d => d.position,
+            getFillColor: [0, 0, 0, 0],
+            getLineColor: [74, 222, 128, 255],
+            getRadius: 5000,
+            radiusMinPixels: 6,
+            radiusMaxPixels: 14,
+            stroked: true,
+            filled: false,
+            lineWidthMinPixels: 1.5,
+            opacity: 1,
+        });
+
+        const proposedInnerLayer = new deck.ScatterplotLayer({
+            id: 'proposed-inner',
+            data: proposedData,
+            getPosition: d => d.position,
+            getFillColor: [74, 222, 128, 220],
+            getRadius: 3000,
+            radiusMinPixels: 3.5,
+            radiusMaxPixels: 8,
+            opacity: 1,
+            pickable: true,
+        });
+
+        deckgl.setProps({ layers: [corridorLayer, chargersLayer, tripsLayer, headsLayer, pulseLayer, proposedOuterLayer, proposedInnerLayer] });
     }
 
     // --- Animation loop ---

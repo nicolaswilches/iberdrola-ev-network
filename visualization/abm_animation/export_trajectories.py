@@ -219,24 +219,70 @@ def _load_road_geometries(data_dir: Path) -> Dict[str, LineString]:
     return road_geoms
 
 
-def _orient_line_toward(line: LineString, city_chain: List[str]) -> LineString:
+def _extend_line_to_cities(
+    line: LineString, city_chain: List[str],
+) -> LineString:
     """
-    Ensure line runs from the first city in city_chain toward the last.
-    Reverses the line if needed.
+    Orient a road geometry along city_chain and extend it with straight-line
+    connectors so it reaches from the first city to the last city.
+
+    Many roads in the parquet cover only a portion of the corridor (e.g. A-4
+    geometry might only cover the Seville section, not Madrid–Córdoba). This
+    function prepends/appends straight lines from the missing cities to the
+    nearest point on the real geometry.
     """
     if len(city_chain) < 2:
         return line
-    first_city = _CITY_COORDS.get(city_chain[0])
-    last_city = _CITY_COORDS.get(city_chain[-1])
-    if not first_city or not last_city:
+
+    first = _CITY_COORDS.get(city_chain[0])
+    last = _CITY_COORDS.get(city_chain[-1])
+    if not first or not last:
         return line
-    start_pt = Point(first_city[1], first_city[0])  # (lon, lat)
+
+    first_pt = Point(first[1], first[0])   # (lon, lat)
+    last_pt = Point(last[1], last[0])
+
+    # Orient: first city should be near line start
     coords = list(line.coords)
+    if first_pt.distance(Point(coords[0])) > first_pt.distance(Point(coords[-1])):
+        coords = coords[::-1]
+
+    # Threshold: if city is >0.3 degrees (~30km) from line, prepend/append a connector
+    CONNECT_THRESH = 0.3
+
+    # Prepend connector from first city to line start
     line_start = Point(coords[0])
+    if first_pt.distance(line_start) > CONNECT_THRESH / 111:
+        # Add intermediate cities that are also far from the line
+        prepend_coords = [(first[1], first[0])]
+        for city_id in city_chain[1:]:
+            city = _CITY_COORDS.get(city_id)
+            if not city:
+                continue
+            cp = Point(city[1], city[0])
+            if cp.distance(line_start) > CONNECT_THRESH / 111:
+                prepend_coords.append((city[1], city[0]))
+            else:
+                break
+        coords = prepend_coords + coords
+
+    # Append connector from line end to last city
     line_end = Point(coords[-1])
-    if start_pt.distance(line_start) > start_pt.distance(line_end):
-        return LineString(coords[::-1])
-    return line
+    if last_pt.distance(line_end) > CONNECT_THRESH / 111:
+        append_coords = []
+        for city_id in reversed(city_chain[:-1]):
+            city = _CITY_COORDS.get(city_id)
+            if not city:
+                continue
+            cp = Point(city[1], city[0])
+            if cp.distance(line_end) > CONNECT_THRESH / 111:
+                append_coords.insert(0, (city[1], city[0]))
+            else:
+                break
+        append_coords.append((last[1], last[0]))
+        coords = coords + append_coords
+
+    return LineString(coords)
 
 
 def _simplify_line(line: LineString, tolerance: float = 0.005) -> List[List[float]]:
@@ -245,25 +291,19 @@ def _simplify_line(line: LineString, tolerance: float = 0.005) -> List[List[floa
     return [[round(x, 4), round(y, 4)] for x, y in simplified.coords]
 
 
-def _interpolate_along_line(
-    line: LineString, frac: float
-) -> Tuple[float, float]:
-    """Interpolate a point at fraction frac along the line. Returns (lon, lat)."""
-    frac = max(0.0, min(1.0, frac))
-    pt = line.interpolate(frac, normalized=True)
-    return (round(pt.x, 5), round(pt.y, 5))
-
-
 def _build_real_corridor_polylines(
     road_geoms: Dict[str, LineString],
+    used_roads: Optional[set] = None,
 ) -> Tuple[List[dict], Dict[str, LineString]]:
     """
     Build corridor polylines from real geometry for display AND for agent routing.
 
+    Only corridors in *used_roads* (if given) are included in the display list.
+    All corridors get a routing line regardless.
+
     Returns:
       - corridors: list of {"road": name, "path": [[lon,lat],...]} for deck.gl
-      - corridor_lines: {corridor_key: oriented LineString} for agent routing
-        where corridor_key = frozenset of city_chain (direction-independent)
+      - corridor_lines: {road_name: extended+oriented LineString} for agent routing
     """
     seen_city_chains = set()
     corridors = []
@@ -273,14 +313,12 @@ def _build_real_corridor_polylines(
         chain_key = tuple(city_chain)
         rev_key = tuple(reversed(city_chain))
         if chain_key in seen_city_chains or rev_key in seen_city_chains:
-            # Still register the line for agent routing under this road name
-            # (it shares geometry with an already-processed corridor)
-            for seen_road, seen_chain in _ROAD_CORRIDORS.items():
-                if tuple(seen_chain) in seen_city_chains or tuple(reversed(seen_chain)) in seen_city_chains:
-                    if tuple(seen_chain) == chain_key or tuple(reversed(seen_chain)) == chain_key:
-                        if seen_road in corridor_lines:
-                            corridor_lines[road_name] = corridor_lines[seen_road]
-                        break
+            # Share the geometry with the already-processed parallel corridor
+            for seen_road in corridor_lines:
+                seen_chain = _ROAD_CORRIDORS.get(seen_road, [])
+                if tuple(seen_chain) == chain_key or tuple(reversed(seen_chain)) == chain_key:
+                    corridor_lines[road_name] = corridor_lines[seen_road]
+                    break
             continue
         seen_city_chains.add(chain_key)
 
@@ -292,7 +330,7 @@ def _build_real_corridor_polylines(
                 geom = road_geoms.get(fallback)
 
         if geom is None:
-            # Fallback: straight lines between cities
+            # Pure fallback: straight lines between cities
             coords = []
             for city in city_chain:
                 if city in _CITY_COORDS:
@@ -304,12 +342,15 @@ def _build_real_corridor_polylines(
         if geom is None or geom.is_empty:
             continue
 
-        oriented = _orient_line_toward(geom, city_chain)
-        corridor_lines[road_name] = oriented
+        # Extend to cover full corridor
+        extended = _extend_line_to_cities(geom, city_chain)
+        corridor_lines[road_name] = extended
 
-        path = _simplify_line(oriented, tolerance=0.003)
-        if len(path) >= 2:
-            corridors.append({"road": road_name, "path": path})
+        # Only include in display if the road carries ABM traffic
+        if used_roads is None or road_name in used_roads:
+            path = _simplify_line(extended, tolerance=0.003)
+            if len(path) >= 2:
+                corridors.append({"road": road_name, "path": path})
 
     return corridors, corridor_lines
 
@@ -351,7 +392,6 @@ def _get_corridor_line_for_trip(
         leg1 = _get_corridor_line_for_trip(origin_city, "MAD", corridor_lines)
         leg2 = _get_corridor_line_for_trip("MAD", dest_city, corridor_lines)
         if leg1 and leg2:
-            # Concatenate the two legs
             line1 = leg1[1]
             line2 = leg2[1]
             if leg1[2]:
@@ -369,8 +409,8 @@ def _subsection_of_line(
     origin: str, destination: str,
 ) -> LineString:
     """
-    Extract the subsection of a corridor line between origin and destination cities.
-    Uses projection onto the line to find start/end fractions.
+    Extract the subsection of a corridor line between origin and destination.
+    Projects both cities onto the line and extracts the segment between them.
     """
     origin_city = origin.split("_")[0] if "_" in origin else origin
     dest_city = destination.split("_")[0] if "_" in destination else destination
@@ -386,14 +426,17 @@ def _subsection_of_line(
     frac_o = line.project(origin_pt, normalized=True)
     frac_d = line.project(dest_pt, normalized=True)
 
+    if abs(frac_o - frac_d) < 0.01:
+        # Projections are too close — the geometry doesn't span these cities.
+        # This shouldn't happen with extended lines, but guard against it.
+        return line
+
     if frac_o > frac_d:
         frac_o, frac_d = frac_d, frac_o
 
-    # Pad slightly to include city vicinity
-    frac_o = max(0.0, frac_o - 0.005)
-    frac_d = min(1.0, frac_d + 0.005)
+    frac_o = max(0.0, frac_o - 0.002)
+    frac_d = min(1.0, frac_d + 0.002)
 
-    # Extract subsection using shapely
     start_dist = frac_o * line.length
     end_dist = frac_d * line.length
 
@@ -401,7 +444,7 @@ def _subsection_of_line(
     if sub.is_empty or sub.geom_type != "LineString":
         return line
 
-    # Orient: should go from origin to destination
+    # Orient from origin to destination
     sub_start = Point(sub.coords[0])
     if origin_pt.distance(sub_start) > dest_pt.distance(sub_start):
         sub = LineString(list(sub.coords)[::-1])
@@ -413,33 +456,32 @@ def _subsection_of_line(
 # Charger locations
 # ---------------------------------------------------------------------------
 
-def _load_charger_locations(data_dir: Path) -> List[dict]:
-    """Load real charger positions from baseline + proposed stations."""
+def _load_charger_locations(data_dir: Path) -> Tuple[List[dict], List[dict]]:
+    """Load real charger positions. Returns (existing_chargers, proposed_stations)."""
     chargers = []
+    proposed = []
 
-    # Baseline chargers (existing)
     baseline_path = data_dir / "interurban_chargers_baseline.csv"
     if baseline_path.exists():
         df = pd.read_csv(baseline_path)
-        # Only fast chargers (>= 50kW)
         fast = df[df["max_power_kw"] >= 50].copy()
         for _, row in fast.iterrows():
             chargers.append({
                 "position": [round(row["longitude"], 5), round(row["latitude"], 5)],
-                "type": "existing",
             })
 
-    # Proposed stations
     proposed_path = data_dir / "proposed_stations.csv"
     if proposed_path.exists():
         df = pd.read_csv(proposed_path)
         for _, row in df.iterrows():
-            chargers.append({
+            proposed.append({
                 "position": [round(row["longitude"], 5), round(row["latitude"], 5)],
-                "type": "proposed",
+                "id": row["location_id"],
+                "road": row["route_segment"],
+                "chargers": int(row["n_chargers_proposed"]),
             })
 
-    return chargers
+    return chargers, proposed
 
 
 # ---------------------------------------------------------------------------
@@ -456,18 +498,42 @@ def export_trajectories(
     print("Loading road geometries...")
     road_geoms = _load_road_geometries(data_dir)
 
-    print("Building corridor polylines...")
-    corridors, corridor_lines = _build_real_corridor_polylines(road_geoms)
-
     print("Loading charger locations...")
-    chargers = _load_charger_locations(data_dir)
-    print(f"  {len(chargers)} charger locations loaded")
+    chargers, proposed_stations = _load_charger_locations(data_dir)
+    print(f"  {len(chargers)} existing chargers, {len(proposed_stations)} proposed stations")
 
-    print("Processing trip data...")
+    # Determine which corridor roads are actually used by ABM trips
+    print("Determining used corridors...")
     trips_df = pd.read_csv(run_dir / "baseline_trip_records.csv")
     charge_df = pd.read_csv(run_dir / "baseline_charge_events.csv")
-
     completed = trips_df[trips_df["status"] == "completed"].copy()
+
+    # Quick scan: build dummy lines to figure out which roads carry traffic
+    dummy_lines = {road: LineString([(0, 0), (1, 1)]) for road in _ROAD_CORRIDORS}
+    used_roads: set = set()
+    for _, row in completed.iterrows():
+        result = _get_corridor_line_for_trip(row["origin"], row["destination"], dummy_lines)
+        if result:
+            used_roads.add(result[0])
+    used_roads.discard("multi")
+    # Add the primary road for multi-hop legs (via MAD)
+    for _, row in completed.iterrows():
+        o = row["origin"].split("_")[0] if "_" in row["origin"] else row["origin"]
+        d = row["destination"].split("_")[0] if "_" in row["destination"] else row["destination"]
+        if o != "MAD" and d != "MAD":
+            for mid in ["MAD"]:
+                r1 = _get_corridor_line_for_trip(o, mid, dummy_lines)
+                r2 = _get_corridor_line_for_trip(mid, d, dummy_lines)
+                if r1:
+                    used_roads.add(r1[0])
+                if r2:
+                    used_roads.add(r2[0])
+    print(f"  {len(used_roads)} corridors carry ABM traffic: {sorted(used_roads)}")
+
+    print("Building corridor polylines...")
+    corridors, corridor_lines = _build_real_corridor_polylines(road_geoms, used_roads=used_roads)
+
+    print("Processing trip data...")
     if len(completed) > max_agents:
         completed = completed.sample(n=max_agents, random_state=42)
 
@@ -618,6 +684,7 @@ def export_trajectories(
     metadata = {
         "total_trips": len(trips_json),
         "total_chargers": len(chargers),
+        "total_proposed": len(proposed_stations),
         "time_range_min": [
             float(min(all_deps)) if all_deps else 300,
             float(max(all_arrs)) if all_arrs else 1440,
@@ -629,6 +696,7 @@ def export_trajectories(
         "trips": trips_json,
         "corridors": corridors,
         "chargers": chargers,
+        "proposed": proposed_stations,
         "metadata": metadata,
     }
 
@@ -637,7 +705,8 @@ def export_trajectories(
         json.dump(output, f)
 
     size_kb = output_path.stat().st_size / 1024
-    print(f"\nExported {len(trips_json)} trips, {len(corridors)} corridors, {len(chargers)} chargers")
+    print(f"\nExported {len(trips_json)} trips, {len(corridors)} corridors, "
+          f"{len(chargers)} chargers, {len(proposed_stations)} proposed stations")
     print(f"Time range: {metadata['time_range_min'][0]:.0f} – {metadata['time_range_min'][1]:.0f} min")
     print(f"Output: {output_path} ({size_kb:.0f} KB)")
 
@@ -648,7 +717,7 @@ def main():
     parser = argparse.ArgumentParser(description="Export ABM trajectories for deck.gl animation")
     parser.add_argument(
         "--run-dir", type=Path,
-        default=Path(__file__).parent.parent.parent / "src" / "new-abm" / "outputs" / "debug" / "10kagents",
+        default=Path(__file__).parent.parent.parent / "src" / "new-abm" / "feedback_loop" / "iter_02",
     )
     parser.add_argument(
         "--data-dir", type=Path,
