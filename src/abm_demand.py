@@ -84,9 +84,10 @@ def compute_daily_bev_flow(imd_total: float) -> float:
     """
     Scale IMD total traffic to 2027 daily BEV flow.
 
-    Formula: daily_bev = IMD × EV_penetration_rate × BEV_fraction
-    where EV_penetration_rate = EV_FLEET_DEMAND_BASE / TOTAL_VEHICLE_FLEET ≈ 5.71%
-    and BEV_fraction = 0.60 (PHEVs excluded — they use ICE on long trips, A4).
+    Formula: daily_bev = IMD * EV_penetration_rate * BEV_fraction
+    where EV_penetration_rate = EV_FLEET_DEMAND_BASE / TOTAL_VEHICLE_FLEET
+    = 2,498,159 / 35,000,000 ~= 7.14% for the 2027 baseline, and
+    BEV_fraction = 0.60 (PHEVs excluded, they use ICE on long trips, A4).
 
     Parameters
     ----------

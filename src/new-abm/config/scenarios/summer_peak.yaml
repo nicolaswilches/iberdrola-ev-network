@@ -1,0 +1,6 @@
+# Scenario: Summer peak day (July/August Mediterranean)
+# Traffic on coastal corridors rises 2.5x vs annual average
+name: summer_peak
+description: "July/August peak day. Demand scaled 2.5x to reflect Mediterranean summer traffic surge (INE tourism data)."
+modifications:
+  demand_volume_multiplier: 2.5

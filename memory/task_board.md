@@ -28,3 +28,7 @@
 - [ ] Write `report/analytical_report.pdf`
 - [ ] Create `presentation/pitch.pdf`
 - [ ] Decide whether to keep or remove `notebooks/test.ipynb`
+
+## ABM Scaling (new-abm)
+
+- [ ] Fix stranding and queue overflow in `src/new-abm/` at 627k agents — see `memory/abm_scaling_task.md` for full debugging plan and root-cause breakdown

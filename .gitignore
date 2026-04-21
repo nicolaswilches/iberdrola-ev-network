@@ -53,6 +53,25 @@ data/raw/dgt_registrations/**/vehiculos/
 # output/*.csv — these are deliverables
 # visualization/*.html — deliverable
 
+# Feedback loop runtime backups
+data/processed/proposed_stations.backup.csv
+
+# ABM research run outputs (data artifacts, not source)
+src/new-abm/outputs/*/
+!src/new-abm/outputs/__init__.py
+!src/new-abm/outputs/aggregator.py
+!src/new-abm/outputs/visualizer.py
+
+# Unrelated archived projects (local only)
+archive/
+
+# Backup files
+*.backup.csv
+
+# Claude session notes (local only, not for commit)
+.claude-session.md
+.claude-notes/
+
 # IDE
 .idea/
 .vscode/

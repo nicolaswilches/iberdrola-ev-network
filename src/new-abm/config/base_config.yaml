@@ -1,0 +1,168 @@
+# Base simulation configuration
+# All time units: minutes. All energy: kWh. All distance: km. All money: EUR.
+
+simulation:
+  sim_duration_min: 2880 # 48-hour window — lets late-evening trips complete
+  random_seed: 42
+  num_agents: 200 # Number of trip agents to simulate
+  log_level: INFO
+
+energy_model:
+  default_consumption_kwh_per_km: 0.20 # Base BEV highway consumption
+  high_speed_penalty: 0.05 # Speed penalty disabled for cleaner demo
+  slope_factor_kwh_per_grade_per_km: 0.04 # kWh penalty per % grade per km (uphill)
+  taper_soc_threshold: 0.80 # Charging power tapers above this SOC fraction
+  taper_min_power_fraction: 0.10 # Minimum power fraction at 100% SOC
+
+behavior:
+  min_reserve_soc_fraction: 0.10 # Never let SOC drop below this
+  no_dest_charger_arrival_soc_fraction: 0.50 # Arrive with 50% if no charger at destination
+  arrival_comfort_soc_fraction:
+    0.15 # Comfort margin above reserve for intermediate stops
+    # Agents stop at the farthest station where they arrive
+    # with ≥ (reserve + comfort) SOC; only falls back to
+    # reserve-only when no comfortable stop exists.
+    # Prevents large-battery agents from skimming to a single
+    # bottleneck station right at the edge of their range.
+  emergency_soc_fraction: 0.15 # Trigger emergency charge search below this
+  target_soc_on_arrival: 0.30 # Desired SOC at destination
+  min_charge_gain_fraction: 0.30 # Don't stop to charge less than 30% battery
+  max_queue_wait_tolerance_min: 30.0 # Skip station before queueing if expected wait exceeds this
+  max_queue_wait_min: 60.0 # Once queued, abandon if actual wait exceeds this (only if a reachable alternative exists)
+  default_value_of_time_eur_per_hour: 28.0
+  default_price_sensitivity: 1.0
+  default_queue_aversion: 1.0
+  default_risk_tolerance: 0.4
+
+fleet:
+  home_charging_penetration: 0.70 # Fraction of agents with home charging
+  destination_charging_penetration: 0.20
+
+  # ---------------------------------------------------------------------------
+  # Real Spanish BEV market mix — interurban-adjusted shares
+  # ---------------------------------------------------------------------------
+  # Sources: ANFAC annual registration data, DGT vehicle census (2024)
+  # interurban_share: registration share re-weighted to exclude city-only
+  #   vehicles (Dacia Spring 27 kWh/30 kW DC, Renault Zoe AC-only);
+  #   their combined ~4% share is absorbed into "Other BEV".
+  # consumption_kwh_per_km: highway WLTP figure (not combined cycle)
+  # usable_fraction: usable / nominal battery (accounts for buffer reserves)
+  # Shares sum to exactly 1.00.
+  spanish_models:
+    - model: "Tesla Model Y"
+      battery_kwh: 75
+      usable_fraction: 0.91
+      consumption_kwh_per_km: 0.178
+      max_dc_kw: 250
+      interurban_share: 0.19
+    - model: "Volkswagen ID.4"
+      battery_kwh: 77
+      usable_fraction: 0.91
+      consumption_kwh_per_km: 0.182
+      max_dc_kw: 135
+      interurban_share: 0.09
+    - model: "MG4 Extended Range"
+      battery_kwh: 64
+      usable_fraction: 0.90
+      consumption_kwh_per_km: 0.153
+      max_dc_kw: 140
+      interurban_share: 0.08
+    - model: "MG4 Standard Range"
+      battery_kwh: 51
+      usable_fraction: 0.90
+      consumption_kwh_per_km: 0.149
+      max_dc_kw: 140
+      interurban_share: 0.05
+    - model: "CUPRA Born 77"
+      battery_kwh: 77
+      usable_fraction: 0.92
+      consumption_kwh_per_km: 0.158
+      max_dc_kw: 135
+      interurban_share: 0.04
+    - model: "CUPRA Born 58"
+      battery_kwh: 58
+      usable_fraction: 0.92
+      consumption_kwh_per_km: 0.156
+      max_dc_kw: 135
+      interurban_share: 0.05
+    - model: "Volkswagen ID.3 Pro+"
+      battery_kwh: 77
+      usable_fraction: 0.91
+      consumption_kwh_per_km: 0.155
+      max_dc_kw: 135
+      interurban_share: 0.04
+    - model: "Volkswagen ID.3 Pro"
+      battery_kwh: 58
+      usable_fraction: 0.91
+      consumption_kwh_per_km: 0.153
+      max_dc_kw: 135
+      interurban_share: 0.03
+    - model: "Renault Megane E-Tech"
+      battery_kwh: 60
+      usable_fraction: 0.92
+      consumption_kwh_per_km: 0.168
+      max_dc_kw: 130
+      interurban_share: 0.05
+    - model: "Tesla Model 3"
+      battery_kwh: 75
+      usable_fraction: 0.91
+      consumption_kwh_per_km: 0.144
+      max_dc_kw: 250
+      interurban_share: 0.06
+    - model: "Hyundai IONIQ 5"
+      battery_kwh: 77
+      usable_fraction: 0.91
+      consumption_kwh_per_km: 0.163
+      max_dc_kw: 220
+      interurban_share: 0.05
+    - model: "Kia EV6"
+      battery_kwh: 77
+      usable_fraction: 0.91
+      consumption_kwh_per_km: 0.164
+      max_dc_kw: 233
+      interurban_share: 0.03
+    - model: "BMW i4"
+      battery_kwh: 83
+      usable_fraction: 0.92
+      consumption_kwh_per_km: 0.178
+      max_dc_kw: 205
+      interurban_share: 0.04
+    - model: "Peugeot e-208"
+      battery_kwh: 50
+      usable_fraction: 0.90
+      consumption_kwh_per_km: 0.154
+      max_dc_kw: 100
+      interurban_share: 0.03
+    - model: "Other BEV"
+      battery_kwh: 65
+      usable_fraction: 0.90
+      consumption_kwh_per_km: 0.168
+      max_dc_kw: 120
+      interurban_share: 0.17 # catch-all: remaining models + city-car share
+
+  # ---------------------------------------------------------------------------
+  # Legacy fallback — used only when spanish_models is absent from config
+  # ---------------------------------------------------------------------------
+  battery_distribution:
+    small: { capacity_kwh: 45, fraction: 0.15 }
+    medium: { capacity_kwh: 65, fraction: 0.40 }
+    large: { capacity_kwh: 77, fraction: 0.35 }
+    xl: { capacity_kwh: 100, fraction: 0.10 }
+
+  acceptance_kw_by_battery:
+    small: 80
+    medium: 135
+    large: 150
+    xl: 250
+
+demand:
+  # Spanish interurban BEV trips are predominantly leisure/vacation, not commutes.
+  # DGT traffic studies show interurban departures peak later than urban commutes:
+  # outbound wave 9:00–11:00; return wave 17:30–20:00.
+  peak_morning_center_min: 570 # 9:30 — leisure outbound wave
+  peak_morning_std_min: 90 # wide spread: 7:30–11:30 covers most departures
+  peak_evening_center_min: 1080 # 18:00 — return wave (later than urban commute)
+  peak_evening_std_min: 120 # wide spread: 16:00–20:00
+  peak_morning_share: 0.30
+  peak_evening_share: 0.40 # return wave is stronger (weekend + day-trip returns)
+  off_peak_share: 0.30

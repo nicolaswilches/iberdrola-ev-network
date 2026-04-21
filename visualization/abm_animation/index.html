@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spain EV Network &mdash; ABM Simulation</title>
+    <script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"></script>
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', -apple-system, sans-serif; overflow: hidden; background: #0a0a0a; }
+        #map { width: 100vw; height: 100vh; }
+
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(10, 10, 10, 0.92);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 20px;
+            color: #fff;
+            backdrop-filter: blur(12px);
+            min-width: 260px;
+            z-index: 100;
+        }
+
+        #controls h1 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: #4ade80;
+        }
+
+        #controls .subtitle {
+            font-size: 11px;
+            color: rgba(255,255,255,0.5);
+            margin-bottom: 16px;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+
+        .stat-row:last-child { border-bottom: none; }
+
+        .stat-label {
+            font-size: 11px;
+            color: rgba(255,255,255,0.6);
+        }
+
+        .stat-value {
+            font-size: 13px;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .stat-value.green { color: #4ade80; }
+        .stat-value.blue { color: #60a5fa; }
+        .stat-value.red { color: #f87171; }
+
+        #time-display {
+            margin-top: 14px;
+            padding-top: 14px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }
+
+        #time-display .time-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255,255,255,0.4);
+            margin-bottom: 4px;
+        }
+
+        #time-display .time-value {
+            font-size: 28px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: #fff;
+        }
+
+        #time-display .date-label {
+            font-size: 11px;
+            color: rgba(255,255,255,0.4);
+            margin-top: 2px;
+        }
+
+        #progress-bar {
+            margin-top: 10px;
+            width: 100%;
+            height: 3px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        #progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4ade80, #60a5fa);
+            border-radius: 2px;
+            transition: width 0.1s linear;
+        }
+
+        #playback {
+            margin-top: 12px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        #playback button {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #fff;
+            border-radius: 6px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.15s;
+        }
+
+        #playback button:hover { background: rgba(255,255,255,0.2); }
+        #playback button.active { background: rgba(74, 222, 128, 0.3); border-color: #4ade80; }
+
+        #btn-speed {
+            margin-left: auto;
+            font-variant-numeric: tabular-nums;
+            min-width: 44px;
+            text-align: center;
+        }
+
+        #legend {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(10, 10, 10, 0.92);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 14px 18px;
+            color: #fff;
+            backdrop-filter: blur(12px);
+            z-index: 100;
+        }
+
+        .legend-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255,255,255,0.4);
+            margin-bottom: 8px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 11px;
+            color: rgba(255,255,255,0.7);
+        }
+
+        .legend-item:last-child { margin-bottom: 0; }
+
+        .legend-line {
+            width: 18px;
+            height: 3px;
+            border-radius: 2px;
+        }
+
+        .legend-gradient {
+            width: 80px;
+            height: 8px;
+            border-radius: 4px;
+            background: linear-gradient(90deg, #f87171, #fbbf24, #4ade80);
+        }
+
+        .legend-pulse {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #4ade80;
+            box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7);
+            animation: pulse-ring 1.4s infinite;
+        }
+        @keyframes pulse-ring {
+            0%   { box-shadow: 0 0 0 0   rgba(74, 222, 128, 0.7); }
+            70%  { box-shadow: 0 0 0 8px rgba(74, 222, 128, 0); }
+            100% { box-shadow: 0 0 0 0   rgba(74, 222, 128, 0); }
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <div id="controls">
+        <h1>EV Network Simulation</h1>
+        <div class="subtitle">Agent-Based Model &mdash; Spain Interurban 2027</div>
+
+        <div class="stat-row">
+            <span class="stat-label">Active Vehicles</span>
+            <span class="stat-value green" id="stat-active">0</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Charging</span>
+            <span class="stat-value blue" id="stat-charging">0</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Trips Completed</span>
+            <span class="stat-value" id="stat-completed" style="color:#fff">0</span>
+        </div>
+
+        <div id="time-display">
+            <div class="time-label">Time of Day</div>
+            <div class="time-value" id="clock">00:00</div>
+            <div class="date-label" id="date-label">Typical weekday, 2027</div>
+        </div>
+
+        <div id="progress-bar"><div id="progress-fill"></div></div>
+
+        <div id="playback">
+            <button id="btn-playpause" class="active">Pause</button>
+            <button id="btn-reset">Reset</button>
+            <button id="btn-speed">1x</button>
+        </div>
+    </div>
+
+    <div id="legend">
+        <div class="legend-title">Battery Level</div>
+        <div class="legend-item">
+            <div class="legend-gradient"></div>
+            <span>0% &mdash; 100%</span>
+        </div>
+        <div class="legend-item" style="margin-top: 8px;">
+            <div class="legend-line" style="background: rgba(74, 222, 128, 0.25);"></div>
+            <span>Interurban corridors</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-dot" style="background: #60a5fa; width: 6px; height: 6px;"></div>
+            <span>Existing chargers</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-pulse"></div>
+            <span>Proposed stations (blinking)</span>
+        </div>
+    </div>
+
+    <script>
+    // --- Configuration ---
+    const DATA_URL = './trajectories.json';
+    const TOTAL_DURATION_MS = 45000;   // 45 seconds for 24h
+    const SIM_START_MIN = 0;           // midnight (0:00)
+    const SIM_END_MIN = 1440;          // midnight next day (24:00)
+    const TRAIL_LENGTH = 20;
+
+    // --- State ---
+    let animationTime = SIM_START_MIN;
+    let playing = true;
+    let speed = 1;
+    let tripData = [];
+    let corridorData = [];
+    let chargerData = [];
+    let proposedData = [];
+    let deckgl = null;
+    let lastFrameTime = null;
+    let animationDone = false;
+
+    // SOC -> RGB color: red (0%) -> amber (50%) -> green (100%)
+    function socToColor(soc) {
+        // soc is 0..1
+        const s = Math.max(0, Math.min(1, soc));
+        let r, g, b;
+        if (s < 0.5) {
+            // red to amber
+            const t = s / 0.5;
+            r = 248 + t * (251 - 248);
+            g = 113 + t * (191 - 113);
+            b = 113 + t * (36 - 113);
+        } else {
+            // amber to green
+            const t = (s - 0.5) / 0.5;
+            r = 251 + t * (74 - 251);
+            g = 191 + t * (222 - 191);
+            b = 36 + t * (128 - 36);
+        }
+        return [Math.round(r), Math.round(g), Math.round(b)];
+    }
+
+    // --- Load data and initialize ---
+    fetch(DATA_URL)
+        .then(r => r.json())
+        .then(data => {
+            tripData = data.trips;
+            corridorData = data.corridors || [];
+            chargerData = data.chargers || [];
+            proposedData = data.proposed || [];
+            animationTime = SIM_START_MIN;
+            initDeck();
+            // Use rAF for the initial call so `animate` always receives a
+            // real frameTime. Calling animate() directly passed undefined,
+            // which poisoned lastFrameTime and made deltaMs NaN forever.
+            requestAnimationFrame(animate);
+        })
+        .catch(err => {
+            console.error('Failed to load trajectories:', err);
+            document.getElementById('controls').innerHTML +=
+                '<p style="color:#f87171;margin-top:10px;font-size:12px;">Error loading data. Run export_trajectories.py first.</p>';
+        });
+
+    function initDeck() {
+        deckgl = new deck.DeckGL({
+            container: 'map',
+            mapStyle: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+            initialViewState: {
+                longitude: -3.7,
+                latitude: 40.0,
+                zoom: 5.5,
+                pitch: 30,
+                bearing: 0,
+            },
+            controller: true,
+            getTooltip: ({object}) => {
+                if (!object || !object.id) return null;
+                return {
+                    html:
+                      `<div style="font-weight:600;color:#4ade80;font-size:12px;">${object.id}</div>` +
+                      `<div style="font-size:11px;opacity:0.7;margin-top:2px;">Proposed station</div>` +
+                      `<div style="font-size:11px;margin-top:6px;">` +
+                      `<span style="opacity:0.6;">Route</span> ${object.road}<br/>` +
+                      `<span style="opacity:0.6;">Chargers</span> ${object.chargers} &times; 150 kW` +
+                      `</div>`,
+                    style: { background: 'rgba(10,10,10,0.92)', color: '#fff', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', padding: '10px 12px', fontFamily: 'Inter, -apple-system, sans-serif' }
+                };
+            }
+        });
+    }
+
+    function updateLayers() {
+        if (!deckgl) return;
+
+        const currentTime = animationTime;
+
+        // Count stats
+        let activeCount = 0;
+        let chargingCount = 0;
+        let completedCount = 0;
+
+        tripData.forEach(trip => {
+            const start = trip.timestamps[0];
+            const end = trip.timestamps[trip.timestamps.length - 1];
+            if (currentTime >= start && currentTime <= end) {
+                activeCount++;
+                // Check if charging: consecutive timestamps at same position
+                for (let i = 1; i < trip.timestamps.length; i++) {
+                    if (trip.timestamps[i] >= currentTime && trip.timestamps[i-1] <= currentTime) {
+                        const p1 = trip.path[i-1];
+                        const p2 = trip.path[i];
+                        if (p1[0] === p2[0] && p1[1] === p2[1] && (trip.timestamps[i] - trip.timestamps[i-1]) > 2) {
+                            chargingCount++;
+                            activeCount--;
+                        }
+                        break;
+                    }
+                }
+            } else if (currentTime > end) {
+                completedCount++;
+            }
+        });
+
+        document.getElementById('stat-active').textContent = activeCount.toLocaleString();
+        document.getElementById('stat-charging').textContent = chargingCount.toLocaleString();
+        document.getElementById('stat-completed').textContent = completedCount.toLocaleString();
+
+        // Clock: show time of day. Guard against non-finite (e.g. on very
+        // first frame before any data has been loaded) so the label never
+        // flashes "NaN:NaN".
+        const totalMin = Number.isFinite(currentTime) ? currentTime : SIM_START_MIN;
+        const hours = Math.floor(totalMin / 60) % 24;
+        const mins = Math.floor(totalMin % 60);
+        document.getElementById('clock').textContent =
+            `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+
+        // Progress bar
+        const progress = (currentTime - SIM_START_MIN) / (SIM_END_MIN - SIM_START_MIN) * 100;
+        document.getElementById('progress-fill').style.width = `${Math.min(100, progress)}%`;
+
+        // --- Layers ---
+
+        // 1. Road corridor highlights
+        const corridorLayer = new deck.PathLayer({
+            id: 'corridors',
+            data: corridorData,
+            getPath: d => d.path,
+            getColor: [74, 222, 128, 50],
+            getWidth: 3000,
+            widthMinPixels: 1.5,
+            widthMaxPixels: 4,
+            capRounded: true,
+            jointRounded: true,
+            opacity: 1,
+        });
+
+        // 2. Trip trails (TripsLayer)
+        const tripsLayer = new deck.TripsLayer({
+            id: 'trips',
+            data: tripData,
+            getPath: d => d.path,
+            getTimestamps: d => d.timestamps,
+            getColor: d => {
+                // Use average SOC for trail color
+                if (d.soc && d.soc.length > 0) {
+                    const avgSoc = d.soc.reduce((a, b) => a + b, 0) / d.soc.length;
+                    return socToColor(avgSoc);
+                }
+                return [74, 222, 128];
+            },
+            opacity: 0.7,
+            widthMinPixels: 2,
+            widthMaxPixels: 4,
+            jointRounded: true,
+            capRounded: true,
+            trailLength: TRAIL_LENGTH,
+            currentTime: currentTime,
+            shadowEnabled: false,
+        });
+
+        // 3. Vehicle head dots with SOC-based color
+        const headsData = [];
+        tripData.forEach(trip => {
+            const timestamps = trip.timestamps;
+            const start = timestamps[0];
+            const end = timestamps[timestamps.length - 1];
+            if (currentTime < start || currentTime > end) return;
+
+            for (let i = 1; i < timestamps.length; i++) {
+                if (timestamps[i] >= currentTime) {
+                    const dt = timestamps[i] - timestamps[i-1];
+                    const frac = dt > 0 ? (currentTime - timestamps[i-1]) / dt : 0;
+                    const p1 = trip.path[i-1];
+                    const p2 = trip.path[i];
+                    const lon = p1[0] + frac * (p2[0] - p1[0]);
+                    const lat = p1[1] + frac * (p2[1] - p1[1]);
+
+                    // Interpolate SOC
+                    let soc = 0.5;
+                    if (trip.soc && trip.soc.length > i) {
+                        soc = trip.soc[i-1] + frac * (trip.soc[i] - trip.soc[i-1]);
+                    }
+
+                    // Detect charging (same position, long duration)
+                    const isCharging = p1[0] === p2[0] && p1[1] === p2[1] && dt > 2;
+
+                    const color = socToColor(soc);
+                    headsData.push({
+                        position: [lon, lat],
+                        color: [...color, 255],
+                        isCharging: isCharging,
+                        radius: isCharging ? 4000 : 2500,
+                    });
+                    break;
+                }
+            }
+        });
+
+        const headsLayer = new deck.ScatterplotLayer({
+            id: 'vehicle-heads',
+            data: headsData,
+            getPosition: d => d.position,
+            getFillColor: d => d.color,
+            getRadius: d => d.radius,
+            radiusMinPixels: d => d.isCharging ? 4 : 3,
+            radiusMaxPixels: 8,
+            opacity: 1,
+        });
+
+        // Charging pulse rings
+        const chargingDots = headsData.filter(d => d.isCharging);
+        const pulseLayer = new deck.ScatterplotLayer({
+            id: 'charging-pulse',
+            data: chargingDots,
+            getPosition: d => d.position,
+            getFillColor: [96, 165, 250, 0],
+            getLineColor: [96, 165, 250, 150],
+            getRadius: 5000 + Math.sin(currentTime * 0.5) * 2000,
+            radiusMinPixels: 5,
+            radiusMaxPixels: 12,
+            stroked: true,
+            filled: false,
+            lineWidthMinPixels: 1,
+            opacity: 0.8,
+        });
+
+        // Existing charger locations (blue dots, smaller than vehicle heads)
+        const chargersLayer = new deck.ScatterplotLayer({
+            id: 'chargers',
+            data: chargerData,
+            getPosition: d => d.position,
+            getFillColor: [96, 165, 250, 180],
+            getRadius: 1200,
+            radiusMinPixels: 1.5,
+            radiusMaxPixels: 3,
+            opacity: 0.9,
+        });
+
+        // Proposed stations -- green blinking marker. Design shared with
+        // bi_map.html: inner filled circle + pulsing outer ring at ~0.8Hz.
+        // The pulse is driven by wall-clock time so it continues blinking
+        // while the simulation is paused.
+        const _pulsePhase = (Date.now() / 750) % (Math.PI * 2);
+        const _pulseScale = 1 + 0.45 * Math.sin(_pulsePhase);         // 0.55x..1.45x
+        const _pulseAlpha = Math.round(80 + 100 * (0.5 + 0.5 * Math.sin(_pulsePhase))); // 80..180
+
+        const proposedOuterLayer = new deck.ScatterplotLayer({
+            id: 'proposed-outer',
+            data: proposedData,
+            getPosition: d => d.position,
+            getFillColor: [0, 0, 0, 0],
+            getLineColor: [74, 222, 128, _pulseAlpha],
+            getRadius: 9000 * _pulseScale,
+            radiusMinPixels: 8,
+            radiusMaxPixels: 26,
+            stroked: true,
+            filled: false,
+            lineWidthMinPixels: 2,
+            opacity: 1,
+            updateTriggers: { getRadius: _pulsePhase, getLineColor: _pulsePhase },
+        });
+
+        const proposedInnerLayer = new deck.ScatterplotLayer({
+            id: 'proposed-inner',
+            data: proposedData,
+            getPosition: d => d.position,
+            getFillColor: [74, 222, 128, 230],
+            getLineColor: [255, 255, 255, 200],
+            getRadius: 3500,
+            radiusMinPixels: 5,
+            radiusMaxPixels: 9,
+            stroked: true,
+            filled: true,
+            lineWidthMinPixels: 1,
+            opacity: 1,
+            pickable: true,
+        });
+
+        deckgl.setProps({ layers: [corridorLayer, chargersLayer, tripsLayer, headsLayer, pulseLayer, proposedOuterLayer, proposedInnerLayer] });
+    }
+
+    // --- Animation loop ---
+    function animate(frameTime) {
+        if (animationDone) {
+            updateLayers();                     // still pulse the ring
+            requestAnimationFrame(animate);
+            return;
+        }
+
+        if (!playing) {
+            lastFrameTime = null;
+            updateLayers();                     // keep blink going while paused
+            requestAnimationFrame(animate);
+            return;
+        }
+
+        if (lastFrameTime === null) {
+            lastFrameTime = frameTime;
+            requestAnimationFrame(animate);
+            return;
+        }
+
+        const deltaMs = frameTime - lastFrameTime;
+        lastFrameTime = frameTime;
+
+        // Convert real time to simulation time: 45s = 1440 min
+        const simDelta = (deltaMs / TOTAL_DURATION_MS) * (SIM_END_MIN - SIM_START_MIN) * speed;
+        animationTime += simDelta;
+
+        // Stop at 24:00 (don't loop)
+        if (animationTime >= SIM_END_MIN) {
+            animationTime = SIM_END_MIN;
+            animationDone = true;
+            playing = false;
+            const btn = document.getElementById('btn-playpause');
+            btn.textContent = 'Play';
+            btn.classList.remove('active');
+        }
+
+        updateLayers();
+        requestAnimationFrame(animate);
+    }
+
+    // --- Controls ---
+    // Single play/pause toggle. When playing it reads "Pause" (the action
+    // clicking it will perform); when paused or done it reads "Play".
+    document.getElementById('btn-playpause').addEventListener('click', () => {
+        const btn = document.getElementById('btn-playpause');
+        if (animationDone) {
+            animationTime = SIM_START_MIN;
+            animationDone = false;
+            playing = true;
+            lastFrameTime = null;
+            btn.textContent = 'Pause';
+            btn.classList.add('active');
+            requestAnimationFrame(animate);
+            return;
+        }
+        playing = !playing;
+        if (playing) {
+            lastFrameTime = null;
+            btn.textContent = 'Pause';
+            btn.classList.add('active');
+            requestAnimationFrame(animate);
+        } else {
+            btn.textContent = 'Play';
+            btn.classList.remove('active');
+        }
+    });
+
+    document.getElementById('btn-reset').addEventListener('click', () => {
+        animationTime = SIM_START_MIN;
+        animationDone = false;
+        lastFrameTime = null;
+        playing = true;
+        const btn = document.getElementById('btn-playpause');
+        btn.textContent = 'Pause';
+        btn.classList.add('active');
+        updateLayers();
+        requestAnimationFrame(animate);
+    });
+
+    document.getElementById('btn-speed').addEventListener('click', () => {
+        const speeds = [0.5, 1, 2, 4];
+        const idx = speeds.indexOf(speed);
+        speed = speeds[(idx + 1) % speeds.length];
+        document.getElementById('btn-speed').textContent = speed + 'x';
+    });
+    </script>
+</body>
+</html>

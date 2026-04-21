@@ -1,0 +1,5 @@
+# Scenario: 95% home charging penetration (near-full adoption)
+name: high_home_charging
+description: "Home charging access rises to 95% of fleet (from 70%). Tests whether interurban demand falls."
+modifications:
+  fleet_home_charging_penetration: 0.95
