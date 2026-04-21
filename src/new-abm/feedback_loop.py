@@ -30,7 +30,7 @@ DEMAND = REPO / "data/processed/demand_per_segment.csv"
 BACKUP = REPO / "data/processed/proposed_stations.backup.csv"
 LOOP_DIR = REPO / "src/new-abm/feedback_loop"
 RUN_DEMO = REPO / "src/new-abm/run_demo.py"
-PY = Path("/opt/anaconda3/envs/iberdrola_abm/bin/python")
+PY = Path(sys.executable)
 
 # From src/constants.py
 MAX_CHARGERS_HIGH_TRAFFIC = 12
