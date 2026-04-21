@@ -1,7 +1,0 @@
-scenario,num_trips,completion_rate,num_stranded,avg_wait_min,avg_charge_min,total_charge_events,total_energy_kwh,avg_station_utilization,max_peak_queue,avg_wait_at_stations_min
-baseline,25000,0.872,3210,75.94,37.99,50017,1391350.5,0.057,785,41.65
-summer_peak,62500,0.814,11612,140.98,34.22,110335,3190339.7,0.097,1972,77.35
-expand_hubs,25000,0.911,2237,69.05,39.93,51936,1440139.0,0.052,713,37.77
-price_reduction,25000,0.872,3210,75.94,37.99,50017,1391350.5,0.057,785,41.65
-capacity_increase,25000,0.881,2969,83.86,38.2,50259,1399328.3,0.057,713,45.3
-high_home_charging,25000,0.87,3253,77.24,35.82,47965,1313151.8,0.052,828,43.77
