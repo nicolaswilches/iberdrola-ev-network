@@ -263,8 +263,9 @@ else:
     print("dso_investment_summary.csv not found — run Section 4 to regenerate")
 """
     map_cell = """# Interactive map — bi_map.html
-# Uses HTML(filename=...) so the map renders directly in Colab output
-# (IFrame with a relative src doesn't resolve inside Colab's sandboxed output frame).
+# Colab's cell output is itself rendered inside a sandboxed iframe, which breaks
+# HTML(filename=...) for full <html>-document payloads like Folium output. Wrap
+# it in our own srcdoc iframe — the same pattern Folium uses in _repr_html_.
 from pathlib import Path as _Path
 from IPython.display import HTML, display, Markdown
 
@@ -276,15 +277,23 @@ display(Markdown(
 
 _bi_map = _Path('visualization/bi_map.html')
 if _bi_map.exists():
-    display(HTML(filename=str(_bi_map)))
+    # Only escape the attribute delimiter + ampersands, matching folium.
+    _html_src = _bi_map.read_text()
+    _srcdoc = _html_src.replace('&', '&amp;').replace('"', '&quot;')
+    display(HTML(
+        f'<iframe srcdoc="{_srcdoc}" width="100%" height="700" '
+        f'style="border:0; border-radius:8px;"></iframe>'
+    ))
 else:
     print(f"WARNING: {_bi_map} not found. Run Section 4.11 (NB10) to regenerate.")
 """
     abm_anim = """# Interactive ABM animation — visualization/abm_animation/index.html
-# Embeds a deck.gl + maplibre animation of the 25k-agent ABM run (2000-trip sample
-# for browser performance). Uses srcdoc iframe with trajectories.json injected
-# inline, because Colab's output sandbox blocks relative fetch() calls.
-import html as _html_escape
+# Colab's output cell is a sandboxed iframe, so a nested IFrame with a
+# /content/ src path is not resolvable from inside the sandbox. Instead we
+# inline trajectories.json into the HTML as a <script type='application/json'>
+# block, rewrite the fetch() to read from that DOM node (no network hop), and
+# embed the entire processed document via a srcdoc iframe — the same pattern
+# Folium uses for its own maps.
 from pathlib import Path as _Path
 from IPython.display import HTML, display, Markdown
 
@@ -294,6 +303,7 @@ display(Markdown(
     "Displayed: 2000-trip browser-friendly sample; battery SOC color gradient (red→amber→green); "
     "charging pauses show as stationary dots with blue pulsing rings; "
     "all 64 corridors that the ABM operates on (Level 2b auto-build). "
+    "Trip paths follow real road geometry (merged parquet corridor families). "
     "Covers 24h of simulation in 45s of playback."
 ))
 
@@ -303,21 +313,38 @@ _anim_data = _Path('visualization/abm_animation/trajectories.json')
 if _anim_html.exists() and _anim_data.exists():
     _raw = _anim_html.read_text()
     _traj = _anim_data.read_text()
-    # Inline the JSON so the iframe doesn't need to fetch() across origins.
-    _raw = _raw.replace(
-        "fetch(DATA_URL)",
-        "Promise.resolve({json: () => (" + _traj + ")})"
+    # Escape </script> inside the JSON string so the enclosing script tag
+    # does not terminate prematurely (defensive: JSON shouldn't contain it
+    # but absolute-safety).
+    _traj_safe = _traj.replace('</script>', '<\\\\/script>')
+    _injected = (
+        '<script type=\"application/json\" id=\"__abm_trip_data__\">'
+        + _traj_safe
+        + '</script></head>'
     )
-    _srcdoc = _html_escape.escape(_raw, quote=True)
+    _raw = _raw.replace('</head>', _injected, 1)
+    # Replace only the fetch() call itself, preserving the subsequent
+    # .then(r => r.json()) chain. We return a Promise whose resolved value
+    # has a .json() method (mimicking the Response API) so the existing
+    # promise chain keeps working without further edits.
+    _raw = _raw.replace(
+        'fetch(DATA_URL)',
+        'Promise.resolve({json: () => JSON.parse('
+        'document.getElementById(\"__abm_trip_data__\").textContent)})'
+    )
+    # srcdoc pattern: escape & and \" in the payload; browsers tolerate
+    # multi-MB attribute values. allow-scripts lets the deck.gl/maplibre
+    # JS run inside the sandboxed iframe.
+    _srcdoc = _raw.replace('&', '&amp;').replace('\"', '&quot;')
     display(HTML(
-        f'<iframe srcdoc="{_srcdoc}" width="100%" height="700" '
-        f'style="border:0; background:#0a0a0a; border-radius:8px;" '
-        f'sandbox="allow-scripts allow-same-origin"></iframe>'
+        f'<iframe srcdoc=\"{_srcdoc}\" width=\"100%\" height=\"720\" '
+        f'sandbox=\"allow-scripts\" '
+        f'style=\"border:0; border-radius:8px;\"></iframe>'
     ))
 else:
-    print(f"WARNING: animation assets not found "
-          f"({_anim_html.exists()=}, {_anim_data.exists()=}). "
-          f"Run visualization/abm_animation/export_trajectories.py to regenerate.")
+    print(f\"WARNING: animation assets not found \"
+          f\"({_anim_html.exists()=}, {_anim_data.exists()=}). \"
+          f\"Run visualization/abm_animation/export_trajectories.py to regenerate.\")
 """
     kpis = """# Executive KPI summary
 kpi_md = f'''

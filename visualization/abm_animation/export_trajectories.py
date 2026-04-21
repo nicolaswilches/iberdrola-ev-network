@@ -101,6 +101,48 @@ _ROAD_FALLBACKS: Dict[str, str] = {
     "N-630": "A-66",    # parallel route
 }
 
+# Corridor families: parquet road names whose geometry collectively defines the
+# full real-road shape of each hand-curated corridor. Parquet often splits a
+# single motorway into several named segments (A-4 + A-4A + A-4R1 + ...), and
+# parallel roads (AP-4 ‖ A-4) share nearly the same geometry. Merging the
+# family gives us a single line that spans the entire corridor's city chain
+# using ONLY real road geometry — no straight-line connectors. This is how
+# we achieve curvy, real-road-shaped trip paths in the animation.
+_CORRIDOR_FAMILIES: Dict[str, List[str]] = {
+    "AP-2":  ["AP-2", "A-2"],
+    "A-2":   ["A-2", "AP-2", "N-2", "N-2A", "N-2R"],
+    "AP-7":  ["AP-7", "A-7", "AP-7N", "AP-7R", "AP-7S"],
+    "A-7":   ["A-7", "AP-7", "AP-7N", "AP-7R", "AP-7S"],
+    "A-7S":  ["A-7S", "AP-7S", "A-7", "N-340"],
+    "A-3":   ["A-3"],
+    "AP-4":  ["AP-4", "A-4", "AP-4A"],
+    "A-4":   ["A-4", "AP-4", "A-4A", "A-4R1", "A-4R2", "N-4", "N-4A"],
+    "A-1":   ["A-1", "AP-1", "A-1A", "N-1", "N-1A", "N-1R", "A-8", "AP-8"],
+    "AP-1":  ["AP-1", "A-1", "N-1", "A-8", "AP-8"],
+    "A-6":   ["A-6", "N-6", "N-6A", "N-603", "A-62", "N-601"],
+    "AP-68": ["AP-68", "A-68"],
+    "A-68":  ["A-68", "AP-68"],
+    "A-8":   ["A-8", "N-634", "N-634A", "N-634R", "A-15", "AP-15", "N-121-A"],
+    "A-66":  ["A-66", "A-66R", "N-630", "N-630A", "A-62"],
+    "AP-46": ["AP-46", "A-45", "A-44", "A-92"],
+    "A-23":  ["A-23"],
+    "AP-9":  ["AP-9", "AP-9V", "AP-9F"],
+    "N-322": ["N-322", "N-322A", "A-4", "N-432"],
+    "N-433": ["N-433", "A-49", "N-630", "N-432", "N-430"],
+    "N-435": ["N-435", "N-435A", "A-49", "N-630"],
+    "N-502": ["N-502", "N-502A", "A-4"],
+    "N-621": ["N-621", "N-621A", "A-67"],
+    "A-67":  ["A-67", "N-611", "N-611A", "N-621"],
+    "A-62":  ["A-62", "A-1", "N-620", "N-620A"],
+    "N-630": ["N-630", "A-66", "N-630A", "A-62"],
+    "A-45":  ["A-45", "N-331", "N-331R"],
+    "A-92":  ["A-92", "A-92M", "A-92N", "A-92R", "A-91", "A-30", "RM-15"],
+    "N-340": ["N-340", "N-340A", "N-340R"],
+    "AP-8":  ["AP-8", "A-8"],
+    "AP-6":  ["AP-6", "A-6", "N-6", "N-603", "A-62", "N-601"],
+    "AP-15": ["AP-15", "AP-15-R", "A-15", "AP-68", "A-68"],
+}
+
 _SEGMENT_KM: Dict[Tuple[str, str], float] = {
     ("MAD", "ZAR"): 310, ("ZAR", "MAD"): 310,
     ("ZAR", "LLE"): 155, ("LLE", "ZAR"): 155,
@@ -236,13 +278,12 @@ def _extend_line_to_cities(
     line: LineString, city_chain: List[str],
 ) -> LineString:
     """
-    Orient a road geometry along city_chain and extend it with straight-line
-    connectors so it reaches from the first city to the last city.
-
-    Many roads in the parquet cover only a portion of the corridor (e.g. A-4
-    geometry might only cover the Seville section, not Madrid–Córdoba). This
-    function prepends/appends straight lines from the missing cities to the
-    nearest point on the real geometry.
+    Orient a road geometry along city_chain, first → last. No straight-line
+    prepend/append: with _CORRIDOR_FAMILIES merging, every corridor's real
+    geometry already reaches within ~30 km of both endpoint cities, and
+    `_subsection_of_line` projects origin/destination onto the line for
+    accurate trip path extraction. Adding straight connectors reintroduces
+    the exact visual artifact we're trying to eliminate.
     """
     if len(city_chain) < 2:
         return line
@@ -252,49 +293,10 @@ def _extend_line_to_cities(
     if not first or not last:
         return line
 
-    first_pt = Point(first[1], first[0])   # (lon, lat)
-    last_pt = Point(last[1], last[0])
-
-    # Orient: first city should be near line start
+    first_pt = Point(first[1], first[0])
     coords = list(line.coords)
     if first_pt.distance(Point(coords[0])) > first_pt.distance(Point(coords[-1])):
         coords = coords[::-1]
-
-    # Threshold: if city is >0.3 degrees (~30km) from line, prepend/append a connector
-    CONNECT_THRESH = 0.3
-
-    # Prepend connector from first city to line start
-    line_start = Point(coords[0])
-    if first_pt.distance(line_start) > CONNECT_THRESH / 111:
-        # Add intermediate cities that are also far from the line
-        prepend_coords = [(first[1], first[0])]
-        for city_id in city_chain[1:]:
-            city = _CITY_COORDS.get(city_id)
-            if not city:
-                continue
-            cp = Point(city[1], city[0])
-            if cp.distance(line_start) > CONNECT_THRESH / 111:
-                prepend_coords.append((city[1], city[0]))
-            else:
-                break
-        coords = prepend_coords + coords
-
-    # Append connector from line end to last city
-    line_end = Point(coords[-1])
-    if last_pt.distance(line_end) > CONNECT_THRESH / 111:
-        append_coords = []
-        for city_id in reversed(city_chain[:-1]):
-            city = _CITY_COORDS.get(city_id)
-            if not city:
-                continue
-            cp = Point(city[1], city[0])
-            if cp.distance(line_end) > CONNECT_THRESH / 111:
-                append_coords.insert(0, (city[1], city[0]))
-            else:
-                break
-        append_coords.append((last[1], last[0]))
-        coords = coords + append_coords
-
     return LineString(coords)
 
 
@@ -302,6 +304,66 @@ def _simplify_line(line: LineString, tolerance: float = 0.005) -> List[List[floa
     """Simplify a LineString and return [[lon, lat], ...] with 4 decimal precision."""
     simplified = line.simplify(tolerance, preserve_topology=True)
     return [[round(x, 4), round(y, 4)] for x, y in simplified.coords]
+
+
+def _merge_family(
+    full_geoms: Dict[str, object],
+    family: List[str],
+    city_chain: List[str],
+) -> Optional[LineString]:
+    """
+    Merge all parquet geometries for a corridor family into a single ordered
+    LineString. Handles LineString, MultiLineString, and GeometryCollection.
+
+    When linemerge produces a MultiLineString (disconnected components), picks
+    the component that passes closest to the most cities in the chain — this
+    is the one that actually represents the corridor route.
+    """
+    geoms: List[LineString] = []
+    for name in family:
+        g = full_geoms.get(name)
+        if g is None or g.is_empty:
+            continue
+        if g.geom_type == "LineString":
+            geoms.append(g)
+        elif g.geom_type == "MultiLineString":
+            geoms.extend(g.geoms)
+        elif g.geom_type == "GeometryCollection":
+            for part in g.geoms:
+                if part.geom_type == "LineString":
+                    geoms.append(part)
+    if not geoms:
+        return None
+
+    union = unary_union(geoms)
+    try:
+        merged = linemerge(union)
+    except Exception:
+        merged = union
+
+    if merged.geom_type == "LineString":
+        return merged
+
+    # MultiLineString: pick the component nearest to the most chain cities
+    components: List[LineString] = []
+    if merged.geom_type == "MultiLineString":
+        components = list(merged.geoms)
+    elif merged.geom_type == "GeometryCollection":
+        components = [g for g in merged.geoms if g.geom_type == "LineString"]
+    if not components:
+        return None
+
+    chain_pts = [
+        Point(_CITY_COORDS[c][1], _CITY_COORDS[c][0])
+        for c in city_chain if c in _CITY_COORDS
+    ]
+
+    def score(comp: LineString) -> Tuple[int, float]:
+        # Count cities within ~30 km (0.27 deg) of this component; tie-break by length
+        close = sum(1 for pt in chain_pts if comp.distance(pt) < 0.27)
+        return (close, comp.length)
+
+    return max(components, key=score)
 
 
 _AUTO_BUFFER_KM = 25.0
@@ -342,11 +404,22 @@ def _build_real_corridor_polylines(
         elif rev_key in seen_city_chains:
             corridor_lines[road_name] = corridor_lines[seen_city_chains[rev_key]]
         else:
-            geom = display_lines.get(road_name)
+            # Primary: merge all parquet roads in the corridor family to get
+            # maximal real-road coverage (curvy geometry, no straight-line
+            # connectors). Covers 32/32 corridors to within ~30km of all
+            # chain-endpoint cities.
+            family = _CORRIDOR_FAMILIES.get(road_name, [road_name])
+            geom = _merge_family(full_geoms, family, city_chain)
+
+            # Secondary: single parquet road (display layer)
+            if geom is None:
+                geom = display_lines.get(road_name)
+            # Tertiary: explicit fallback mapping
             if geom is None:
                 fallback = _ROAD_FALLBACKS.get(road_name)
                 if fallback:
                     geom = display_lines.get(fallback)
+            # Last resort: straight-line chain of cities
             if geom is None:
                 coords = []
                 for city in city_chain:
