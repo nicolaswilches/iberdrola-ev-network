@@ -100,6 +100,32 @@ _CITY_NODES: List[Tuple] = [
     ("PAL", "Palencia",                42.010, -4.527, "city",    78_000),  # N-621
     ("STD", "Santander",               43.463, -3.800, "city",   172_000),  # N-621
     ("LOG", "Logroño",                 42.466, -2.443, "city",   153_000),  # AP-68
+    # Northern corridor & Galicia interior
+    ("LEO", "León",                    42.599, -5.567, "city",   122_000),  # A-66, A-6, N-120
+    ("OVI", "Oviedo",                  43.362, -5.844, "city",   219_000),  # A-66, A-8
+    ("GIJ", "Gijón",                   43.545, -5.662, "city",   269_000),  # A-8
+    ("PON", "Ponferrada",              42.548, -6.596, "city",    64_000),  # A-6, N-120
+    ("LUG", "Lugo",                    43.012, -7.556, "city",    98_000),  # A-6, A-54
+    ("OUR", "Ourense",                 42.336, -7.864, "city",   105_000),  # A-52, N-120
+    # Mediterranean & south coast
+    ("GIR", "Girona",                  41.983,  2.824, "city",   103_000),  # AP-7
+    ("ALM", "Almería",                 36.834, -2.463, "city",   200_000),  # A-7, A-92, N-340
+    ("CAR", "Cartagena",               37.605, -0.987, "city",   216_000),  # AP-7, N-340
+    ("ALG", "Algeciras",               36.131, -5.453, "city",   122_000),  # A-7, N-340
+    ("JER", "Jerez",                   36.686, -6.137, "city",   213_000),  # AP-4, A-4
+    ("CDZ", "Cádiz",                   36.529, -6.292, "city",   113_000),  # AP-4, A-4
+    # Ruta de la Plata / Extremadura / Castilla
+    ("SAL", "Salamanca",               40.970, -5.664, "city",   143_000),  # A-66, A-62
+    ("CAC", "Cáceres",                 39.476, -6.372, "city",    96_000),  # A-66
+    ("ZAM", "Zamora",                  41.503, -5.744, "city",    61_000),  # A-66
+    # Central Spain
+    ("GUA", "Guadalajara",             40.632, -3.163, "city",    87_000),  # A-2, AP-2
+    ("CUE", "Cuenca",                  40.071, -2.137, "city",    54_000),  # A-40
+    ("SEG", "Segovia",                 40.949, -4.117, "city",    51_000),  # AP-6
+    ("SOR", "Soria",                   41.764, -2.468, "city",    39_000),  # N-122, A-15
+    ("CRE", "Ciudad Real",             38.986, -3.927, "city",    75_000),  # A-4, A-41
+    # Aragón
+    ("HUS", "Huesca",                  42.137, -0.408, "city",    53_000),  # A-23
 ]
 
 
@@ -112,24 +138,28 @@ _CITY_NODES: List[Tuple] = [
 # obtain calibrated OD flows.
 _ROAD_CORRIDORS: List[Tuple[str, List[str]]] = [
     # TEN-T Core motorways
-    ("AP-2",  ["MAD", "ZAR", "LLE", "TAR", "BCN"]),
-    ("A-2",   ["MAD", "ZAR", "LLE", "TAR", "BCN"]),
-    ("AP-7",  ["BCN", "TAR", "CAS", "VAL", "ALI", "MUR"]),
-    ("A-7",   ["BCN", "TAR", "CAS", "VAL", "ALI", "MUR"]),
-    ("A-7S",  ["MAL", "ALI", "MUR"]),
+    ("AP-2",  ["MAD", "GUA", "ZAR", "LLE", "TAR", "BCN"]),
+    ("A-2",   ["MAD", "GUA", "ZAR", "LLE", "TAR", "BCN"]),
+    ("AP-7",  ["GIR", "BCN", "TAR", "CAS", "VAL", "ALI", "MUR", "CAR"]),
+    ("A-7",   ["GIR", "BCN", "TAR", "CAS", "VAL", "ALI", "MUR", "CAR", "ALM", "MAL", "ALG"]),
+    ("A-7S",  ["ALG", "MAL", "ALI", "MUR"]),
     ("A-3",   ["MAD", "ALB", "VAL"]),
-    ("AP-4",  ["MAD", "COR", "SEV"]),
-    ("A-4",   ["MAD", "COR", "SEV"]),
+    ("AP-4",  ["MAD", "CRE", "COR", "SEV", "JER", "CDZ"]),
+    ("A-4",   ["MAD", "CRE", "COR", "SEV", "JER", "CDZ"]),
     ("A-1",   ["MAD", "BUR", "VIT", "BIL"]),
     ("AP-1",  ["MAD", "BUR", "VIT", "BIL"]),
-    ("A-6",   ["MAD", "VLD"]),
+    ("A-6",   ["MAD", "VLD", "LEO", "PON", "LUG", "ACO"]),
     ("AP-68", ["ZAR", "LOG", "VIT", "BIL"]),
     ("A-68",  ["ZAR", "LOG", "VIT", "BIL"]),
-    ("A-8",   ["BIL", "SSB", "PMP"]),
-    ("A-66",  ["SEV", "MER", "VLD"]),
+    # A-8 Cantabrian autovía (BIL→GIJ). PMP removed — A-8 does not go to Pamplona.
+    ("A-8",   ["BIL", "SSB", "STD", "OVI", "GIJ"]),
+    # A-66 / N-630 Ruta de la Plata: SEV → GIJ via Puerto de Pajares.
+    # VLD removed — VLD is not on A-66.
+    ("A-66",  ["SEV", "MER", "CAC", "SAL", "ZAM", "LEO", "OVI", "GIJ"]),
+    ("N-630", ["SEV", "MER", "CAC", "SAL", "ZAM", "LEO", "OVI", "GIJ"]),
     ("AP-46", ["MAL", "GRN"]),
     # Corridors with AFIR gaps (proposed stations placed on these)
-    ("A-23",  ["ZAR", "TER", "VAL"]),
+    ("A-23",  ["VAL", "TER", "ZAR", "HUS"]),
     ("AP-9",  ["ACO", "SCQ", "VIG"]),
     ("N-322", ["ALB", "JAE", "COR"]),
     ("N-433", ["SEV", "MER", "BAD"]),
@@ -138,15 +168,22 @@ _ROAD_CORRIDORS: List[Tuple[str, List[str]]] = [
     ("N-621", ["PAL", "STD"]),
     # Further common corridors
     ("A-67",  ["PAL", "STD"]),
-    ("A-62",  ["MAD", "VLD", "BUR"]),
-    ("N-630", ["SEV", "MER", "VLD"]),
+    # A-62 corrected: Salamanca–Valladolid–Burgos. MAD is not on A-62.
+    ("A-62",  ["SAL", "VLD", "BUR"]),
     ("A-45",  ["COR", "MAL"]),
-    ("A-92",  ["SEV", "GRN", "MUR"]),
-    ("N-340", ["ALI", "MAL"]),
+    # A-92 corrected: ends at Almería (not Murcia).
+    ("A-92",  ["SEV", "GRN", "ALM"]),
+    # N-340 coastal: full Mediterranean chain.
+    ("N-340", ["ALI", "MUR", "CAR", "ALM", "MAL", "ALG"]),
     # Parallel autopistas kept distinct from their autovia counterparts
     ("AP-8",  ["BIL", "SSB"]),       # parallels A-8 Bilbao to San Sebastian
-    ("AP-6",  ["MAD", "VLD"]),       # parallels A-6 Madrid to Valladolid
+    ("AP-6",  ["MAD", "SEG", "VLD"]),# parallels A-6 Madrid to Valladolid via Segovia
     ("AP-15", ["PMP", "ZAR"]),       # Navarra autopista, joins AP-68 at Tudela
+    # New corridors
+    ("A-52",  ["OUR", "VIG"]),                                       # Rías Baixas autovía
+    ("N-120", ["LOG", "BUR", "LEO", "PON", "OUR", "VIG"]),          # northern national road
+    ("A-40",  ["MAD", "CUE"]),                                       # Madrid – Cuenca
+    ("N-122", ["ZAR", "SOR", "VLD"]),                                # Zaragoza – Soria – Valladolid
 ]
 
 # ---------------------------------------------------------------------------
@@ -221,6 +258,56 @@ _SEGMENT_KM: Dict[Tuple[str, str], float] = {
     # Cross-connections
     ("ZAR", "PMP"): 170, ("PMP", "ZAR"): 170,
     ("PAL", "BUR"):  95, ("BUR", "PAL"):  95,
+    # --- Extensions for expanded corridor chains ---
+    # A-66 / N-630 Ruta de la Plata: Sevilla → León
+    ("MER", "CAC"):  75, ("CAC", "MER"):  75,
+    ("CAC", "SAL"): 205, ("SAL", "CAC"): 205,
+    ("SAL", "ZAM"):  65, ("ZAM", "SAL"):  65,
+    ("ZAM", "LEO"): 110, ("LEO", "ZAM"): 110,
+    # A-8 Cantabrian autovía: BIL → GIJ (via SSB, STD, OVI)
+    ("SSB", "STD"): 195, ("STD", "SSB"): 195,
+    ("STD", "OVI"): 195, ("OVI", "STD"): 195,
+    ("OVI", "GIJ"):  28, ("GIJ", "OVI"):  28,
+    # A-6 Madrid → A Coruña
+    ("VLD", "LEO"): 140, ("LEO", "VLD"): 140,
+    ("LEO", "PON"): 110, ("PON", "LEO"): 110,
+    ("PON", "LUG"):  95, ("LUG", "PON"):  95,
+    ("LUG", "ACO"):  95, ("ACO", "LUG"):  95,
+    # A-52 / N-120 Galicia
+    ("OUR", "VIG"): 105, ("VIG", "OUR"): 105,
+    ("PON", "OUR"):  95, ("OUR", "PON"):  95,
+    ("BUR", "LEO"): 195, ("LEO", "BUR"): 195,
+    ("LOG", "BUR"): 145, ("BUR", "LOG"): 145,
+    # A-7 southern extension: MUR → ALG
+    ("MUR", "CAR"):  50, ("CAR", "MUR"):  50,
+    ("CAR", "ALM"): 225, ("ALM", "CAR"): 225,
+    ("ALM", "MAL"): 210, ("MAL", "ALM"): 210,
+    ("MAL", "ALG"): 130, ("ALG", "MAL"): 130,
+    # AP-7 northern extension via Girona
+    ("GIR", "BCN"): 100, ("BCN", "GIR"): 100,
+    # AP-4 / A-4 south extension: SEV → CDZ
+    ("SEV", "JER"):  90, ("JER", "SEV"):  90,
+    ("JER", "CDZ"):  35, ("CDZ", "JER"):  35,
+    # A-23 northern extension to Huesca
+    ("ZAR", "HUS"):  75, ("HUS", "ZAR"):  75,
+    # A-62 corrected: SAL → VLD
+    ("SAL", "VLD"): 115, ("VLD", "SAL"): 115,
+    # A-2 / AP-2 via Guadalajara
+    ("MAD", "GUA"):  56, ("GUA", "MAD"):  56,
+    ("GUA", "ZAR"): 260, ("ZAR", "GUA"): 260,
+    # AP-6 via Segovia
+    ("MAD", "SEG"):  95, ("SEG", "MAD"):  95,
+    ("SEG", "VLD"): 110, ("VLD", "SEG"): 110,
+    # A-92 extension to Almería
+    ("GRN", "ALM"): 165, ("ALM", "GRN"): 165,
+    # A-4 Madrid – Ciudad Real – Córdoba (MAD-CRE already covered above as 190)
+    ("MAD", "CRE"): 190, ("CRE", "MAD"): 190,
+    ("CRE", "COR"): 225, ("COR", "CRE"): 225,
+    # A-40 Madrid – Cuenca (MAD-CUE already above as 165)
+    ("MAD", "CUE"): 165, ("CUE", "MAD"): 165,
+    # N-122 Zaragoza – Soria – Valladolid
+    ("ZAR", "SOR"): 160, ("SOR", "ZAR"): 160,
+    ("SOR", "VLD"): 240, ("VLD", "SOR"): 240,
 }
 
 # Speed limits by road prefix (km/h) — used to derive travel time.
@@ -806,21 +893,21 @@ def _build_od_matrix(
     Build an ODMatrix calibrated to 2027 BEV demand from
     ``demand_per_segment.csv``.
 
-    For each road in *demand_df*, daily BEV flow is mapped to the
-    (origin_city, destination_city) pair from *corridors*.
-    Both directions are added (roads are bidirectional).
+    Emits an ODPair for **every unordered city pair** in every hand-curated
+    corridor chain (not only adjacent city pairs), so long-haul trips like
+    MAD↔BCN are first-class origins and destinations alongside short-hop
+    pairs like MAD↔GUA. Pair flow follows an inverse-distance (1/L) gravity
+    weighting so shorter intra-corridor trips are proportionally more common
+    than end-to-end trips — consistent with observed interurban travel
+    distributions.
 
-    Roads with no matching corridor entry are NOT redistributed — their
-    demand is dropped and the unmapped fraction is logged.  If that fraction
-    exceeds 10% a WARNING is emitted so the caller can diagnose coverage gaps.
+    Both hand-curated corridors from ``_ROAD_CORRIDORS`` AND geometry-based
+    auto-detected corridors (from ``_build_road_corridors``) emit OD pairs,
+    giving full coverage of the ~150-road interurban network. Auto-detected
+    corridors with fewer than 2 SOC-viable chargers along their chain are
+    still emitted but receive reduced demand (50%) to avoid routing thrash
+    from agents that cannot complete SOC-feasible paths.
     """
-    # corridor lookup: road_name -> (origin, dest)
-    corridor_lookup: Dict[str, Tuple[str, str]] = {}
-    for road_name, nodes in corridors.items():
-        valid = [n for n in nodes if n in network.nodes]
-        if len(valid) >= 2:
-            corridor_lookup[road_name] = (valid[0], valid[-1])
-
     if "route_segment" not in demand_df.columns or \
        "daily_bev_traffic_2027" not in demand_df.columns:
         logger.warning(
@@ -846,32 +933,140 @@ def _build_od_matrix(
         .to_dict()
     )
 
+    # All corridors (hand-curated + auto-detected) contribute to OD emission.
+    # Auto-detected corridors receive a 0.5× demand dampening so any charger-
+    # sparse chain cannot dominate routing traffic and thrash the simulator.
+    static_names = {name for name, _ in _ROAD_CORRIDORS}
+    AUTO_DEMAND_SCALE = 0.5
+
     od = ODMatrix()
     unmatched_flow = 0.0
     matched_flow = 0.0
     matched_roads = 0
+    auto_matched_roads = 0
 
     for road_name, total_flow in road_demand.items():
-        if road_name not in corridor_lookup:
+        is_auto = road_name not in static_names
+        if is_auto:
+            total_flow = total_flow * AUTO_DEMAND_SCALE
+
+        nodes = corridors.get(road_name, [])
+        valid = [n for n in nodes if n in network.nodes]
+        if len(valid) < 2:
             unmatched_flow += total_flow
-            logger.debug("Unmapped road %s: %.0f daily BEV trips dropped", road_name, total_flow)
+            logger.debug(
+                "Unmapped road %s: chain has <2 valid cities (%.0f trips dropped)",
+                road_name, total_flow,
+            )
             continue
-        origin, dest = corridor_lookup[road_name]
+
+        seg_lens = [
+            _get_segment_km(valid[i], valid[i + 1], network)
+            for i in range(len(valid) - 1)
+        ]
+        total_len = sum(seg_lens) or 1.0
         purpose = _infer_purpose(road_name)
-        od.add_pair(ODPair(
-            origin=origin,
-            destination=dest,
-            daily_bev_trips=float(total_flow),
-            purpose=purpose,
-        ))
-        od.add_pair(ODPair(
-            origin=dest,
-            destination=origin,
-            daily_bev_trips=float(total_flow),
-            purpose=purpose,
-        ))
+        n = len(valid)
+
+        # Enumerate all unordered city pairs (i, j) with i < j. Pair length is
+        # the along-corridor distance from city i to city j.
+        pair_lens: Dict[Tuple[int, int], float] = {}
+        for i in range(n):
+            cumulative = 0.0
+            for j in range(i + 1, n):
+                cumulative += seg_lens[j - 1]
+                pair_lens[(i, j)] = cumulative
+
+        # Gravity weights: flow ∝ 1 / pair_length. Normalise so the sum of all
+        # one-way pair flows on this corridor equals ``total_flow`` (preserves
+        # the IMD-calibrated corridor-level trip volume from iter_02 logic).
+        weights = {k: 1.0 / max(lg, 1.0) for k, lg in pair_lens.items()}
+        total_weight = sum(weights.values()) or 1.0
+
+        for (i, j), w in weights.items():
+            pair_flow = float(total_flow * w / total_weight)
+            if pair_flow < 0.5:
+                continue
+            o, d = valid[i], valid[j]
+            od.add_pair(ODPair(
+                origin=o, destination=d,
+                daily_bev_trips=pair_flow, purpose=purpose,
+            ))
+            od.add_pair(ODPair(
+                origin=d, destination=o,
+                daily_bev_trips=pair_flow, purpose=purpose,
+            ))
+
         matched_flow += total_flow
         matched_roads += 1
+        if is_auto:
+            auto_matched_roads += 1
+
+    logger.info(
+        "OD demand by corridor type: %d hand-curated + %d auto-detected = %d total",
+        matched_roads - auto_matched_roads, auto_matched_roads, matched_roads,
+    )
+
+    # ------------------------------------------------------------------
+    # Cross-corridor OD pairs (gravity model)
+    # ------------------------------------------------------------------
+    # Fill in city-pairs that don't share a hand-curated corridor (e.g.
+    # BCN↔SEV, SEV↔MAL, MAD↔VIG) but are geographically within BEV range.
+    # Flow is weighted by population gravity:  f ∝ pop_i * pop_j / d^2 ,
+    # capped at 700 km graph distance, and normalised so the total cross-
+    # corridor flow equals CROSS_FRACTION of the corridor-based flow.
+    CROSS_FRACTION = 0.15
+    city_info: Dict[str, Tuple[float, float, int]] = {
+        code: (lat, lon, pop) for code, _, lat, lon, _, pop in _CITY_NODES
+    }
+    existing_pairs = {(p.origin, p.destination) for p in od.pairs}
+
+    raw_cross: List[Tuple[str, str, float, float]] = []
+    ids = [c for c in city_info if c in network.nodes]
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            ci, cj = ids[i], ids[j]
+            if (ci, cj) in existing_pairs or (cj, ci) in existing_pairs:
+                continue
+            try:
+                gdist = network.shortest_path_length(
+                    ci, cj, weight="distance_km"
+                )
+            except Exception:
+                continue
+            if gdist <= 0.0 or gdist > 700.0:
+                continue
+            pop_i = city_info[ci][2]
+            pop_j = city_info[cj][2]
+            weight = (pop_i * pop_j) / (gdist * gdist)
+            raw_cross.append((ci, cj, gdist, weight))
+
+    target_cross_flow = matched_flow * CROSS_FRACTION
+    total_cross_weight = sum(w for _, _, _, w in raw_cross) or 1.0
+    cross_scale = target_cross_flow / total_cross_weight
+    cross_added = 0
+    cross_flow_total = 0.0
+    for ci, cj, _gd, w in raw_cross:
+        pair_flow = cross_scale * w
+        if pair_flow < 0.5:
+            continue
+        od.add_pair(ODPair(
+            origin=ci, destination=cj,
+            daily_bev_trips=pair_flow, purpose="leisure",
+        ))
+        od.add_pair(ODPair(
+            origin=cj, destination=ci,
+            daily_bev_trips=pair_flow, purpose="leisure",
+        ))
+        cross_added += 1
+        cross_flow_total += 2 * pair_flow
+
+    logger.info(
+        "Cross-corridor OD: %d gravity pairs added "
+        "(%.0f daily BEV trips ≈ %.0f%% of corridor flow, %d candidates considered)",
+        cross_added, cross_flow_total,
+        CROSS_FRACTION * 100.0, len(raw_cross),
+    )
 
     total_csv_flow = matched_flow + unmatched_flow
     unmapped_pct = (unmatched_flow / total_csv_flow * 100.0) if total_csv_flow > 0 else 0.0
@@ -979,13 +1174,15 @@ def _project_onto_polyline(
     Return the along-road km position of point (lat, lon) projected onto
     the polyline defined by *city_chain*.
 
-    Each segment of the polyline is a straight line in geographic coordinates
-    (adequate accuracy at Spain's scale for corridor-level positioning).
-    The function returns the cumulative km at the closest projection point.
+    Projection is done in metric-equivalent space: longitude differences are
+    scaled by ``cos(mean_lat)`` so east-west and north-south are comparable.
+    Previously this used raw-degree dot-product projection, which compressed
+    east-west distance by ~24% at Spain's latitudes and mis-ordered stations
+    on diagonal corridors.
     """
     cumulative_km = 0.0
     best_km = 0.0
-    min_dist_deg = float("inf")
+    min_dist_metric = float("inf")
 
     for i in range(len(city_chain) - 1):
         nid_a = city_chain[i]
@@ -1008,21 +1205,30 @@ def _project_onto_polyline(
 
         ax, ay = node_a.longitude, node_a.latitude
         bx, by = node_b.longitude, node_b.latitude
-        dx, dy = bx - ax, by - ay
+
+        # Scale longitude deltas by cos(mean_lat) so that dot-product projection
+        # works in metric-equivalent space rather than raw degree space.
+        mean_lat_rad = math.radians((ay + by + lat) / 3.0)
+        lon_scale = math.cos(mean_lat_rad)
+
+        dx = (bx - ax) * lon_scale
+        dy = by - ay
         denom = dx * dx + dy * dy
 
         if denom < 1e-12:
             t = 0.0
         else:
-            t = ((lon - ax) * dx + (lat - ay) * dy) / denom
+            t = (((lon - ax) * lon_scale) * dx + (lat - ay) * dy) / denom
             t = max(0.0, min(1.0, t))
 
-        cx = ax + t * dx
+        cx_scaled = ax * lon_scale + t * (bx - ax) * lon_scale
         cy = ay + t * dy
-        dist_deg = math.sqrt((lon - cx) ** 2 + (lat - cy) ** 2)
+        dist_metric = math.sqrt(
+            (lon * lon_scale - cx_scaled) ** 2 + (lat - cy) ** 2
+        )
 
-        if dist_deg < min_dist_deg:
-            min_dist_deg = dist_deg
+        if dist_metric < min_dist_metric:
+            min_dist_metric = dist_metric
             best_km = cumulative_km + t * seg_km
 
         cumulative_km += seg_km

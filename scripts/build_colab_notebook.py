@@ -264,94 +264,106 @@ if dso_path.exists():
 else:
     print("dso_investment_summary.csv not found — run Section 4 to regenerate")
 """
-    map_cell = """# Interactive BI map -- visualization/bi_map.html
-# Same deck.gl design language as the ABM animation: dark-matter basemap,
-# layer toggles, hover tooltips. Four layers:
-#   - Interurban corridors (minimal translucent white)
-#   - Substations by DSO (triangles; i-DE green, Endesa blue, Viesgo red)
-#   - Existing fast chargers by DSO (squares; same palette as substations)
-#   - Proposed stations (green blinking circles)
-# Colab's cell output is itself a sandboxed iframe, so we wrap the standalone
-# HTML payload in our own srcdoc iframe — same pattern Folium uses.
+    # Shared helper cell: start a background HTTP server rooted at the repo
+    # and expose an `_emit_new_tab_link(path, anchor_text)` function that the
+    # BI map and ABM animation cells below use to launch each HTML in a new
+    # browser tab. In Colab this goes through google.colab's port forwarder;
+    # in local Jupyter it prints a direct http://localhost:<port> link.
+    launcher_helper = """# Map launcher helper -- serves the repo over HTTP so the BI map and ABM
+# animation HTML files can open in separate browser tabs instead of being
+# embedded as iframes. Idempotent: the server is started once per kernel;
+# sibling/repeat cell runs reuse the same port.
+import http.server
+import socketserver
+import threading
 from pathlib import Path as _Path
-from IPython.display import HTML, display, Markdown
+from IPython.display import HTML, display
 
-display(Markdown("### Interactive BI map (`visualization/bi_map.html`)"))
+_MAP_PORT = 8901
+_MAP_ROOT = str(_Path.cwd().resolve())
+
+class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, directory=_MAP_ROOT, **kw)
+    def log_message(self, *a, **kw):
+        pass  # mute request logging so the cell output stays clean
+
+def _ensure_map_server(port=_MAP_PORT):
+    \"\"\"Start the HTTP server once per kernel; subsequent calls are no-ops.\"\"\"
+    try:
+        srv = socketserver.TCPServer(('127.0.0.1', port), _QuietHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    except OSError:
+        pass  # port already bound -- reuse the existing server
+
+def _emit_new_tab_link(rel_path, anchor_text):
+    \"\"\"Render a 'launch in new tab' control for `rel_path` (relative to the
+    repo root). In Colab we emit a port-forwarded link via
+    google.colab.output.serve_kernel_port_as_window; in local Jupyter we
+    display a styled http://localhost anchor.\"\"\"
+    _ensure_map_server()
+    rel = rel_path if rel_path.startswith('/') else '/' + rel_path
+    try:
+        from google.colab import output as _colab_output
+        _colab_output.serve_kernel_port_as_window(
+            _MAP_PORT, path=rel, anchor_text=anchor_text
+        )
+    except ImportError:
+        display(HTML(
+            f'<a href=\"http://localhost:{_MAP_PORT}{rel}\" target=\"_blank\" '
+            f'style=\"display:inline-block;padding:10px 16px;background:#4ade80;'
+            f'color:#0a0a0a;border-radius:6px;text-decoration:none;font-weight:600;'
+            f'font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:14px;\">'
+            f'{anchor_text}</a>'
+        ))
+"""
+    map_cell = """# Interactive BI map -- launches visualization/bi_map.html in a new tab.
+# Served over the local HTTP server started by the launcher-helper cell above,
+# so the page runs full-viewport in its own tab instead of a cramped iframe.
+from pathlib import Path as _Path
+from IPython.display import display, Markdown
+
+display(Markdown(\"### Interactive BI map\"))
 display(Markdown(
-    "2,147 substations, 3,246 existing fast chargers, and the 8 proposed stations. "
-    "Hover any marker for grid/DSO/charger metadata. Toggle layers from the left panel. "
-    "Proposed stations blink and share the same design used in the ABM animation below."
+    \"Opens `visualization/bi_map.html` in a new browser tab. \"
+    \"2,147 substations + 3,246 existing fast chargers + 8 proposed stations, \"
+    \"coloured by grid status (green Sufficient / amber Moderate / red Congested). \"
+    \"TEN-T tier-styled corridors, congestion heatmap, and flowing station<-substation links. \"
+    \"Hover any marker or corridor for details.\"
 ))
 
 _bi_map = _Path('visualization/bi_map.html')
-if _bi_map.exists():
-    _html_src = _bi_map.read_text()
-    _srcdoc = _html_src.replace('&', '&amp;').replace('\"', '&quot;')
-    display(HTML(
-        f'<iframe srcdoc=\"{_srcdoc}\" width=\"100%\" height=\"720\" '
-        f'sandbox=\"allow-scripts\" style=\"border:0; border-radius:8px;\"></iframe>'
-    ))
-else:
+if not _bi_map.exists():
     print(f\"WARNING: {_bi_map} not found. Run scripts/build_bi_map.py to regenerate.\")
+else:
+    _emit_new_tab_link(_bi_map.as_posix(), 'Open BI map in a new tab \\u2197')
 """
-    abm_anim = """# Interactive ABM animation — visualization/abm_animation/index.html
-# Colab's output cell is a sandboxed iframe, so a nested IFrame with a
-# /content/ src path is not resolvable from inside the sandbox. Instead we
-# inline trajectories.json into the HTML as a <script type='application/json'>
-# block, rewrite the fetch() to read from that DOM node (no network hop), and
-# embed the entire processed document via a srcdoc iframe — the same pattern
-# Folium uses for its own maps.
+    abm_anim = """# Interactive ABM animation -- launches visualization/abm_animation/index.html
+# in a new browser tab. Because the HTML is served directly over HTTP (not
+# wrapped in an iframe srcdoc), the page's existing fetch('trajectories.json')
+# works unmodified -- no inline injection required.
 from pathlib import Path as _Path
-from IPython.display import HTML, display, Markdown
+from IPython.display import display, Markdown
 
-display(Markdown("### ABM trip simulation — 25k agents, 64 corridors"))
+display(Markdown(\"### ABM trip simulation -- 25k agents, 64 corridors\"))
 display(Markdown(
-    "Source run: `src/new-abm/feedback_loop/iter_02/` (final converged 25k-agent iteration). "
-    "Displayed: 2000-trip browser-friendly sample; battery SOC color gradient (red→amber→green); "
-    "charging pauses show as stationary dots with blue pulsing rings; "
-    "all 64 corridors that the ABM operates on (Level 2b auto-build). "
-    "Trip paths follow real road geometry (merged parquet corridor families). "
-    "Covers 24h of simulation in 45s of playback."
+    \"Opens `visualization/abm_animation/index.html` in a new browser tab. \"
+    \"Source run: `src/new-abm/feedback_loop/iter_02/` (final converged 25k-agent iteration). \"
+    \"Displayed: 2,000-trip browser-friendly sample; battery SOC colour gradient (red -> amber -> green); \"
+    \"charging pauses show as stationary dots with blue pulsing rings; \"
+    \"all 64 corridors that the ABM operates on (Level 2b auto-build). \"
+    \"Trip paths follow real road geometry. Covers 24h of simulation in 45s of playback.\"
 ))
 
 _anim_html = _Path('visualization/abm_animation/index.html')
 _anim_data = _Path('visualization/abm_animation/trajectories.json')
 
-if _anim_html.exists() and _anim_data.exists():
-    _raw = _anim_html.read_text()
-    _traj = _anim_data.read_text()
-    # Escape </script> inside the JSON string so the enclosing script tag
-    # does not terminate prematurely (defensive: JSON shouldn't contain it
-    # but absolute-safety).
-    _traj_safe = _traj.replace('</script>', '<\\\\/script>')
-    _injected = (
-        '<script type=\"application/json\" id=\"__abm_trip_data__\">'
-        + _traj_safe
-        + '</script></head>'
-    )
-    _raw = _raw.replace('</head>', _injected, 1)
-    # Replace only the fetch() call itself, preserving the subsequent
-    # .then(r => r.json()) chain. We return a Promise whose resolved value
-    # has a .json() method (mimicking the Response API) so the existing
-    # promise chain keeps working without further edits.
-    _raw = _raw.replace(
-        'fetch(DATA_URL)',
-        'Promise.resolve({json: () => JSON.parse('
-        'document.getElementById(\"__abm_trip_data__\").textContent)})'
-    )
-    # srcdoc pattern: escape & and \" in the payload; browsers tolerate
-    # multi-MB attribute values. allow-scripts lets the deck.gl/maplibre
-    # JS run inside the sandboxed iframe.
-    _srcdoc = _raw.replace('&', '&amp;').replace('\"', '&quot;')
-    display(HTML(
-        f'<iframe srcdoc=\"{_srcdoc}\" width=\"100%\" height=\"720\" '
-        f'sandbox=\"allow-scripts\" '
-        f'style=\"border:0; border-radius:8px;\"></iframe>'
-    ))
-else:
+if not (_anim_html.exists() and _anim_data.exists()):
     print(f\"WARNING: animation assets not found \"
           f\"({_anim_html.exists()=}, {_anim_data.exists()=}). \"
           f\"Run visualization/abm_animation/export_trajectories.py to regenerate.\")
+else:
+    _emit_new_tab_link(_anim_html.as_posix(), 'Open ABM animation in a new tab \\u2197')
 """
     kpis = """# Executive KPI summary
 kpi_md = f'''
@@ -473,6 +485,14 @@ else:
         md("## 1.4 — DSO investment summary", section="1.4"),
         code(dso, section="1.4"),
         md("## 1.5 — Interactive map", section="1.5"),
+        md(
+            "The BI map and the ABM animation below each open in a new "
+            "browser tab. The next cell starts a local HTTP server; the "
+            "two cells after it emit a clickable **Open in a new tab** link "
+            "each.",
+            section="1.5",
+        ),
+        code(launcher_helper, section="1.5"),
         code(map_cell, section="1.5"),
         md("## 1.5b — ABM trip simulation", section="1.5b"),
         code(abm_anim, section="1.5b"),
