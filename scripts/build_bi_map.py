@@ -719,6 +719,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       `</div>`,
       style: tooltipStyle() };
   }
+  function tooltipForCorridor(o) {
+    const tierLabel = { Core: 'TEN-T Core', Comprehensive: 'TEN-T Comprehensive', General: 'General interurban' };
+    const tierSpacing = { Core: '60 km', Comprehensive: '100 km', General: '120 km' };
+    return { html:
+      `<div style="font-weight:600;color:#7dd3fc;font-size:12px;">${o.road || 'Corridor'}</div>` +
+      `<div style="font-size:11px;opacity:0.7;margin-top:2px;">${tierLabel[o.tier] || o.tier}</div>` +
+      `<div style="font-size:11px;margin-top:6px;">` +
+      `<span style="opacity:0.6;">AFIR spacing</span> ${tierSpacing[o.tier] || '-'} max` +
+      `</div>`,
+      style: tooltipStyle() };
+  }
   function tooltipForLink(o) {
     return { html:
       `<div style="font-weight:600;color:#fff;font-size:12px;">${o.proposed_id} &rarr; ${o.sub_id}</div>` +
@@ -745,6 +756,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       if (id === 'chargers')                                   return tooltipForCharger(object);
       if (id === 'proposed-inner' || id === 'proposed-outer')  return tooltipForProposed(object);
       if (id === 'links')                                      return tooltipForLink(object);
+      if (id === 'corridors')                                  return tooltipForCorridor(object);
       return null;
     }
   });
@@ -789,6 +801,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         widthMaxPixels: 6,
         capRounded: true,
         jointRounded: true,
+        pickable: true,
+        autoHighlight: true,
+        highlightColor: [255, 255, 255, 180],
         opacity: 1,
       }));
     }
