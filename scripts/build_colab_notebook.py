@@ -205,11 +205,13 @@ RUN_FULL_PIPELINE = False   # Re-run NB01→NB10 from raw data (~12–15 min)
 RUN_NB02          = False   # Re-run SARIMA EV projection (needs pmdarima; output locked at 2,498,159)
 RUN_ABM_FEEDBACK  = False   # Re-run the ABM→LP feedback loop (~20 min; iter_00/01/02 committed)
 RUN_VALIDATION    = False   # Re-run the demand validation stack (06a–06d + 07b, ~10 min)
+RUN_MIP_V2        = False   # Re-run the v2 MIP exploration (NB07c, Core 4, PuLP+CBC, ~3–5 min)
 
 print(f"RUN_FULL_PIPELINE = {RUN_FULL_PIPELINE}")
 print(f"RUN_NB02          = {RUN_NB02}")
 print(f"RUN_ABM_FEEDBACK  = {RUN_ABM_FEEDBACK}")
 print(f"RUN_VALIDATION    = {RUN_VALIDATION}")
+print(f"RUN_MIP_V2        = {RUN_MIP_V2}")
 """
 
     return [
@@ -411,6 +413,55 @@ all_pass = all(p for _, p in checks)
 print('-' * 62)
 print(f"Total: {sum(p for _, p in checks)}/{len(checks)} {'PASS' if all_pass else 'FAIL'}")
 """
+    v2_intro_md = """## 1.8 — v2 MIP exploration (post-submission)
+
+Committed alongside the locked v1 submission: a Mixed Integer Program over an
+enriched candidate set (2,238 sites) using PuLP+CBC with **Core 4** constraints
+— AFIR spacing, per-segment demand satisfaction, grid eligibility, and DSO
+equity. The v2 network is not the submitted answer; it is an actionable 2027
+growth plan on top of the v1 Phase 1 minimum.
+
+See `notebooks/07c_network_optimization_mip.ipynb` for the full driver or flip
+`RUN_MIP_V2 = True` in Section 0.4 to regenerate from scratch (see the new
+Section 6b).
+"""
+    v2_display = """# v2 submission-style files + v1/v2 comparison + penalty sensitivity
+from pathlib import Path as _Path
+import pandas as pd
+from IPython.display import display, Markdown
+
+f1_v2_path = _Path('output/File_1_v2.csv')
+f2_v2_path = _Path('output/File_2_v2.csv')
+f3_v2_path = _Path('output/File_3_v2.csv')
+cmp_path   = _Path('data/processed/v1_v2_comparison.csv')
+sweep_path = _Path('data/processed/mip_v2_penalty_sweep.csv')
+
+if f1_v2_path.exists():
+    display(Markdown("### File_1_v2.csv"))
+    display(pd.read_csv(f1_v2_path))
+    f2_v2 = pd.read_csv(f2_v2_path)
+    display(Markdown(
+        f"### File_2_v2.csv — {len(f2_v2)} proposed stations, "
+        f"{f2_v2['n_chargers_proposed'].sum()} chargers, "
+        f"{f2_v2['n_chargers_proposed'].sum() * 150 / 1000:.1f} MW"
+    ))
+    display(f2_v2.head(10))
+    f3_v2 = pd.read_csv(f3_v2_path)
+    display(Markdown(f"### File_3_v2.csv — {len(f3_v2)} friction points (Moderate + Congested only)"))
+    display(f3_v2.head(10))
+    if cmp_path.exists():
+        display(Markdown("### v1 vs v2 comparison"))
+        display(pd.read_csv(cmp_path))
+    if sweep_path.exists():
+        display(Markdown(
+            "### Penalty sensitivity — unmet-demand cost vs station count\\n"
+            "Traces the Pareto curve from AFIR-only (low penalty) to demand-saturated (high penalty)."
+        ))
+        display(pd.read_csv(sweep_path))
+else:
+    print("v2 MIP outputs not found. Flip RUN_MIP_V2 = True in Section 0.4 and re-run, "
+          "or run `python src/run_mip_v2.py` locally.")
+"""
     return [
         md(intro, section="1.0"),
         md("## 1.1 — File_1.csv", section="1.1"),
@@ -429,6 +480,8 @@ print(f"Total: {sum(p for _, p in checks)}/{len(checks)} {'PASS' if all_pass els
         code(kpis, section="1.6"),
         md("## 1.7 — Compliance checklist", section="1.7"),
         code(checks, section="1.7"),
+        md(v2_intro_md, section="1.8"),
+        code(v2_display, section="1.8"),
     ]
 
 
@@ -449,6 +502,7 @@ gated by four flags (set in Section 0.4):
 | `RUN_NB02` | `False` | Re-runs the SARIMA EV projection (requires `pmdarima`) | ~5 min |
 | `RUN_ABM_FEEDBACK` | `False` | Re-runs the ABM → LP feedback loop (3 iters) | ~20 min |
 | `RUN_VALIDATION` | `False` | Re-runs the demand validation stack (06a–06d + 07b) | ~10 min |
+| `RUN_MIP_V2` | `False` | Re-runs the v2 MIP exploration (NB07c, Core 4, PuLP+CBC) | ~3–5 min |
 
 **Default `Run All` behaviour:** Section 1 displays the final committed outputs
 instantly; Sections 3 and 7 execute quickly (audit materialisation + reference
@@ -493,6 +547,8 @@ here. Content is identical to the repo at commit `{sha}`.
         "grid_analysis.py",
         "abm_demand.py",
         "optimization.py",
+        "candidate_generation.py",
+        "run_mip_v2.py",
     ]
     for i, fname in enumerate(files, start=1):
         p = src_dir / fname
@@ -732,6 +788,103 @@ and `output/figures/` — set the flag to regenerate from scratch.
 
 
 # -----------------------------------------------------------------------------
+# Section 6b — v2 MIP exploration (post-submission)
+# -----------------------------------------------------------------------------
+
+def section_6b() -> list[nbformat.NotebookNode]:
+    intro = """# Section 6b — v2 MIP exploration (Core 4 constraints)
+
+The locked v1 submission (Section 1) is produced by the sequential greedy
+placer in `src/optimization.py::place_stations_greedy`. It closes every
+baseline AFIR gap but does **not** optimise over demand, grid capacity, or
+DSO equity — those are brief requirements the greedy handles only
+indirectly.
+
+This section runs a **Mixed Integer Program** (`place_stations_mip`) over an
+enriched candidate set, with constraints for:
+
+1. **AFIR** — per baseline gap, `ceil(L/T) - 1` stations required; a greedy
+   closer runs post-MIP to guarantee 0 post-placement gaps.
+2. **Demand** — per-segment charger coverage ≥ ABM demand, with continuous
+   slack `u_j ≥ 0` penalised at €200k / unmet charger.
+3. **Grid** — candidate hard-filtered to substation within 25 km, with
+   D4-tiered connection-extension cost (€0 / €100k / €300k / €1M / €3M).
+4. **DSO equity** — `i-DE ≥ 35%`, `Endesa ≥ 30%`, `Viesgo ≥ 10%` of total kW.
+
+Solver: PuLP + CBC (open-source). Typical solve: ~60s for ~2,000 candidates.
+
+**This section is gated by `RUN_MIP_V2` (set in Section 0.4).** Default is
+`False`: the committed v2 outputs (`output/File_{1,2,3}_v2.csv`,
+`data/processed/proposed_stations_v2.csv`, `mip_v2_summary.json`, etc.) are
+shown in Section 1.8 without re-execution. Flip the flag to regenerate.
+"""
+    out: list[nbformat.NotebookNode] = [md(intro, section="6b.0")]
+
+    build_cell = """if not RUN_MIP_V2:
+    print('RUN_MIP_V2 = False — skipping v2 MIP regeneration. '
+          'See Section 1.8 for committed outputs.')
+else:
+    from src.candidate_generation import build_candidate_set
+    cand_df, cov_df = build_candidate_set(
+        data_dir='data/processed',
+        out_dir='data/processed',
+        catchment_km=40.0,
+        dedupe_km=2.0,
+        high_imd_threshold=0.0,
+        high_imd_spacing_km=40.0,
+    )
+    print(f'Candidates: {len(cand_df)} | Coverage pairs: {len(cov_df)}')
+"""
+    run_cell = """if RUN_MIP_V2:
+    from src.run_mip_v2 import run as run_mip_v2
+    _result = run_mip_v2(
+        data_dir='data/processed',
+        out_dir='data/processed',
+        solver_time_limit_s=180,
+        ide_share=0.35,
+        endesa_share=0.30,
+        viesgo_share=0.10,
+        unmet_penalty_eur=200_000.0,
+    )
+    print('v2 MIP finished. See Section 1.8 for outputs.')
+"""
+    sweep_cell = """if RUN_MIP_V2:
+    # Optional: penalty sweep (4 runs × ~60s = ~4 min)
+    import pandas as pd
+    from src.run_mip_v2 import run as run_mip_v2
+    rows = []
+    for p in [50_000, 100_000, 200_000, 400_000]:
+        r = run_mip_v2(
+            data_dir='data/processed',
+            out_dir='data/processed/_sweep',
+            solver_time_limit_s=120,
+            unmet_penalty_eur=p,
+            write_submission_files=False,
+        )
+        s = r['summary']
+        rows.append({
+            'unmet_penalty_eur': p,
+            'n_stations': s['n_stations'],
+            'n_chargers': s['n_chargers'],
+            'total_mw': s['total_kw'] / 1000,
+            'unmet_chargers': s['unmet_total_chargers'],
+            'total_capex_eur': s['total_capex_eur'],
+        })
+    sweep = pd.DataFrame(rows)
+    sweep.to_csv('data/processed/mip_v2_penalty_sweep.csv', index=False)
+    print(sweep.to_string(index=False))
+"""
+    out.append(md("## 6b.1 — Regenerate candidate set (2,238 sites)", section="6b.1"))
+    out.append(code(build_cell, section="6b.1",
+                    origin="src/candidate_generation.py"))
+    out.append(md("## 6b.2 — Solve the MIP + post-placement AFIR closer", section="6b.2"))
+    out.append(code(run_cell, section="6b.2", origin="src/run_mip_v2.py"))
+    out.append(md("## 6b.3 — Penalty sensitivity sweep (optional)", section="6b.3"))
+    out.append(code(sweep_cell, section="6b.3", origin="src/run_mip_v2.py"))
+    return out
+
+
+# -----------------------------------------------------------------------------
 # Section 7 — References
 # -----------------------------------------------------------------------------
 
@@ -777,6 +930,7 @@ def build() -> nbformat.NotebookNode:
         + section_4()
         + section_5()
         + section_6()
+        + section_6b()
         + section_7()
     )
     nb.metadata.update({
