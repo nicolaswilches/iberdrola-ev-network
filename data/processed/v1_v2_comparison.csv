@@ -1,0 +1,12 @@
+metric,v1 (locked 8-station),v2 (MIP Core 4)
+proposed stations,8.0,225.0
+total chargers,28.0,785.0
+total MW,4.2,117.8
+unique routes,8.0,136.0
+friction points (File_3),8.0,194.0
+  Sufficient,0.0,30.0
+  Moderate,0.0,5.0
+  Congested,8.0,190.0
+DSO i-DE (kW),600.0,55200.0
+DSO Endesa (kW),2700.0,50850.0
+DSO Viesgo (kW),900.0,11700.0

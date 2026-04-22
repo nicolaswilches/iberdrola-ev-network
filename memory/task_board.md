@@ -1,6 +1,6 @@
 # Task Board
 
-**Last updated:** 2026-04-13
+**Last updated:** 2026-04-22
 
 ## Done
 
@@ -15,6 +15,9 @@
 - [x] Re-execute NB04–NB10 plus auxiliary NB06a–NB06d with the corrected logic
 - [x] Regenerate `File_1.csv`, `File_2.csv`, `File_3.csv`, `dso_investment_summary.csv`, and `visualization/bi_map.html`
 - [x] Re-audit the regenerated network: 8 stations, 26 chargers, 0 remaining AFIR gaps
+- [x] BI map: swap primary palette to `grid_status` (green/amber/red), add congestion heatmap, TEN-T tier styling, station↔substation links, friction badges, KPI dashboard
+- [x] ABM animation corridor geometry QA: eliminate off-corridor trip jumps (92.7 km → 3.0 km max); capped all 248 display fragments at 5 km; added continuity-checked stitcher, MAD-anchored multi-hop, and jump-guard reject log
+- [x] v2 MIP model (Core 4): enriched candidate set (2,238 candidates), PuLP+CBC solver, AFIR+demand+grid+DSO-equity constraints, post-placement greedy AFIR closer → v2 network: 225 stations / 785 chargers / 117.8 MW; 0 AFIR gaps; unmet 427; DSO split i-DE 47% / Endesa 43% / Viesgo 10%
 
 ## Current Result
 
@@ -25,7 +28,7 @@
 
 ## Pending Deliverables
 
-- [ ] Write `report/analytical_report.pdf`
+- [ ] Write `report/analytical_report.pdf` (wait until v2 MIP validated; v1 = Phase 1, v2 = full 2027 target narrative)
 - [ ] Create `presentation/pitch.pdf`
 - [ ] Decide whether to keep or remove `notebooks/test.ipynb`
 

@@ -563,3 +563,363 @@ def place_stations_greedy(
         covered_indices.add(best_idx)
 
     return pd.DataFrame(stations)
+
+
+# =======================================================================
+# MIP FORMULATION — v2 optimizer (Core 4 constraints)
+# =======================================================================
+# Produces an AFIR-compliant, demand-satisfying, grid-feasible, DSO-balanced
+# station network by solving a Mixed Integer Program (PuLP + CBC) over an
+# enriched candidate set. Coexists with the legacy `place_stations_greedy`
+# above so the locked 2026-04-13 submission remains reproducible.
+#
+# Decision variables
+#   x_i ∈ {0,1} — place station at candidate i
+#   c_i ∈ ℤ, c_i ∈ [min_c_i, max_c_i] — chargers at i (0 when x_i=0)
+#   u_j ∈ ℝ≥0 — unmet demand at segment j (slack)
+#
+# Objective
+#   min  Σ (fixed_i * x_i + 150kW_cost * c_i) + W_UNMET * Σ u_j
+#
+# Core 4 constraints (in this order):
+#   1. AFIR spacing  — each baseline gap covered by ≥1 station
+#   2. Demand        — Σ c_i · relevance(i,j) + baseline_j + u_j ≥ demand_j
+#   3. Grid          — candidates without a substation within 25 km excluded
+#   4. DSO equity    — per-DSO kW share bounded below
+# =======================================================================
+
+
+def _dso_label(name: str) -> str:
+    """Map distributor strings to canonical File_3 values."""
+    if not isinstance(name, str):
+        return "Endesa"
+    n = name.strip().lower()
+    if "ide" in n or "iberdrola" in n or "i-de" in n or "i_de" in n:
+        return "i-DE"
+    if "endesa" in n or "distribución" in n:
+        return "Endesa"
+    if "viesgo" in n:
+        return "Viesgo"
+    return name
+
+
+def _fixed_cost_with_connection_penalty(
+    base_fixed: float,
+    connection_distance_km: float,
+) -> float:
+    """Add grid-extension surcharge as connection distance rises (D4 tiers)."""
+    if pd.isna(connection_distance_km):
+        return base_fixed + 1_000_000
+    if connection_distance_km <= 5:
+        return base_fixed
+    if connection_distance_km <= 15:
+        return base_fixed + 100_000
+    if connection_distance_km <= 25:
+        return base_fixed + 300_000  # high-cost extension
+    if connection_distance_km <= 50:
+        return base_fixed + 1_000_000  # remote greenfield grid build
+    return base_fixed + 3_000_000  # very remote (e.g., AP-9 at 98 km)
+
+
+def _infer_candidate_tent(candidate_row, demand_by_route: dict) -> bool:
+    """Candidate inherits TEN-T flag from its route_segment."""
+    if "is_tent" in candidate_row and not pd.isna(candidate_row["is_tent"]):
+        return bool(candidate_row["is_tent"])
+    return bool(demand_by_route.get(str(candidate_row.get("route_segment")), False))
+
+
+def _candidate_charger_bounds(
+    candidate_row,
+    imd_by_route: dict,
+) -> tuple[int, int]:
+    """Min / max chargers per AFIR B4/B5, keyed on TEN-T and traffic."""
+    is_tent = bool(candidate_row.get("is_tent", False))
+    min_c = MIN_CHARGERS_TENT if is_tent else MIN_CHARGERS_STANDARD
+    imd = float(imd_by_route.get(str(candidate_row.get("route_segment")), 0.0))
+    max_c = MAX_CHARGERS_HIGH_TRAFFIC if imd >= HIGH_TRAFFIC_IMD_THRESHOLD else MAX_CHARGERS_STANDARD
+    return min_c, max_c
+
+
+def _existing_baseline_per_segment(
+    baseline_df: pd.DataFrame,
+    demand_df: pd.DataFrame,
+    min_power_kw: float = MIN_EXISTING_CHARGER_POWER_KW,
+) -> pd.Series:
+    """Per-segment baseline charger count (≥50 kW within segment_id)."""
+    fast = baseline_df[baseline_df["max_power_kw"] >= min_power_kw].copy()
+    # baseline_df has n_connectors, prefer that; fallback to 1 per site
+    if "n_connectors" in fast.columns:
+        fast["_n"] = fast["n_connectors"].fillna(1).clip(lower=1)
+    else:
+        fast["_n"] = 1
+    by_seg = fast.groupby("segment_id")["_n"].sum()
+    return demand_df["segment_id"].map(by_seg).fillna(0.0)
+
+
+def _build_gap_coverage(
+    candidates_df: pd.DataFrame,
+    gaps_df: pd.DataFrame,
+) -> dict:
+    """For each gap, the list of candidate indices that can close it.
+
+    A candidate closes a gap iff it sits on the same route (Carretera) and
+    its along-route position is within the gap's AFIR threshold of the
+    gap's start/end. For candidates that lack an along-route position
+    (projection unavailable), we fall back to same-route membership.
+    """
+    gap_coverage = {}
+    # Normalize keys
+    cand = candidates_df.reset_index(drop=True).copy()
+    cand["_route_key"] = cand["route_segment"].astype(str).str.strip().str.upper()
+
+    for gi, gap in gaps_df.reset_index(drop=True).iterrows():
+        gap_route = str(gap.get("Carretera", "")).strip().upper()
+        thresh = float(gap.get("gap_spacing_threshold_km", MAX_STATION_SPACING_KM) or MAX_STATION_SPACING_KM)
+        start_km = float(gap.get("gap_start_km", 0) or 0)
+        end_km = float(gap.get("gap_end_km", 0) or 0)
+        # Candidates on the same route
+        same_route = cand[cand["_route_key"] == gap_route]
+        # Prefer along-route filtering via candidate_km if present
+        if "candidate_km" in same_route.columns and same_route["candidate_km"].notna().any():
+            within = (
+                (same_route["candidate_km"] >= start_km - thresh)
+                & (same_route["candidate_km"] <= end_km + thresh)
+            )
+            idxs = same_route[within].index.tolist()
+        else:
+            idxs = same_route.index.tolist()
+        gap_coverage[gi] = idxs
+    return gap_coverage
+
+
+def place_stations_mip(
+    candidates_df: pd.DataFrame,
+    coverage_df: pd.DataFrame,
+    demand_df: pd.DataFrame,
+    gaps_df: pd.DataFrame,
+    baseline_chargers_df: pd.DataFrame,
+    dso_min_share: dict | None = None,
+    unmet_penalty_eur: float = 200_000.0,
+    solver_time_limit_s: int = 120,
+    msg: bool = False,
+) -> dict:
+    """Solve the Core 4 MIP and return selected stations + diagnostics.
+
+    Returns dict with:
+      stations: DataFrame (location_id, latitude, longitude, route_segment,
+                           n_chargers_proposed, source, grid_status, ...)
+      unmet:    DataFrame (segment_id, unmet_demand)
+      summary:  dict of solver / cost / coverage metrics
+    """
+    import pulp
+
+    dso_min_share = dso_min_share or {"i-DE": 0.35, "Endesa": 0.30, "Viesgo": 0.10}
+
+    # --- Pre-compute helpers ---------------------------------------------
+    cand = candidates_df.reset_index(drop=True).copy()
+    cand["dso_canonical"] = cand["distributor_network"].map(_dso_label)
+    # Grid filter: exclude candidates >25 km from any substation, EXCEPT
+    # gap_midpoint candidates — those are AFIR-required and must remain in the
+    # feasible set even if grid connection is costly (they inherit the remote
+    # penalty via _fixed_cost_with_connection_penalty below).
+    keep = (cand["connection_distance_km"] <= 25.0) | (cand["source"] == "gap_midpoint")
+    cand = cand[keep].reset_index(drop=True)
+
+    demand_by_route = demand_df.groupby("route_segment")["is_tent"].max().to_dict()
+    imd_by_route = demand_df.groupby("route_segment")["imd_total"].max().fillna(0).to_dict()
+
+    # Charger bounds per candidate
+    min_c = []
+    max_c = []
+    for _, row in cand.iterrows():
+        lo, hi = _candidate_charger_bounds(row, imd_by_route)
+        min_c.append(lo)
+        max_c.append(hi)
+    cand["_min_c"] = min_c
+    cand["_max_c"] = max_c
+
+    # Fixed cost with connection penalty
+    cand["_fixed_cost"] = [
+        _fixed_cost_with_connection_penalty(
+            float(r.get("fixed_cost_eur", 150_000)),
+            float(r.get("connection_distance_km", 25.0)),
+        )
+        for _, r in cand.iterrows()
+    ]
+
+    # Per-segment baseline absorption
+    baseline_per_seg = _existing_baseline_per_segment(baseline_chargers_df, demand_df)
+    demand_j = demand_df["n_chargers_needed"].to_numpy(dtype=float)
+    baseline_j = baseline_per_seg.to_numpy(dtype=float)
+    net_demand = np.maximum(demand_j - baseline_j, 0.0)
+
+    # Gap coverage (candidate indices that can close each gap)
+    gap_coverage = _build_gap_coverage(cand, gaps_df) if len(gaps_df) else {}
+
+    # Coverage matrix (candidate_id -> list of segment_id)
+    cov = coverage_df[coverage_df["candidate_id"].isin(cand["candidate_id"])]
+    cand_idx_by_id = {cid: i for i, cid in enumerate(cand["candidate_id"].tolist())}
+    seg_idx_by_id = {sid: j for j, sid in enumerate(demand_df["segment_id"].tolist())}
+    cov_pairs = [
+        (cand_idx_by_id[c], seg_idx_by_id[s], float(w))
+        for c, s, w in zip(cov["candidate_id"], cov["segment_id"], cov["weight"])
+        if c in cand_idx_by_id and s in seg_idx_by_id
+    ]
+
+    n_cand = len(cand)
+    n_seg = len(demand_df)
+    print(f"MIP setup: {n_cand} candidates (after grid filter), {n_seg} segments, "
+          f"{len(gap_coverage)} AFIR gaps, {len(cov_pairs)} coverage pairs")
+
+    # --- Build model -----------------------------------------------------
+    prob = pulp.LpProblem("ev_network_v2", pulp.LpMinimize)
+
+    x = [pulp.LpVariable(f"x_{i}", cat=pulp.LpBinary) for i in range(n_cand)]
+    c = [
+        pulp.LpVariable(f"c_{i}", lowBound=0, upBound=int(cand.iloc[i]["_max_c"]),
+                        cat=pulp.LpInteger)
+        for i in range(n_cand)
+    ]
+    u = [pulp.LpVariable(f"u_{j}", lowBound=0, cat=pulp.LpContinuous)
+         for j in range(n_seg)]
+
+    # Objective
+    var_cost = 100_000.0  # per-charger cost, F1 midpoint
+    prob += (
+        pulp.lpSum(float(cand.iloc[i]["_fixed_cost"]) * x[i] for i in range(n_cand))
+        + pulp.lpSum(var_cost * c[i] for i in range(n_cand))
+        + pulp.lpSum(unmet_penalty_eur * u[j] for j in range(n_seg))
+    )
+
+    # Charger bounds linked to x
+    for i in range(n_cand):
+        lo = int(cand.iloc[i]["_min_c"])
+        hi = int(cand.iloc[i]["_max_c"])
+        prob += c[i] >= lo * x[i], f"min_c_{i}"
+        prob += c[i] <= hi * x[i], f"max_c_{i}"
+
+    # Constraint 1 — AFIR spacing (each gap needs enough stations so no sub-gap
+    # exceeds the tier threshold). For a gap of length L and threshold T,
+    # minimum stations = ceil(L / T) - 1 (even distribution produces L/(n+1) <= T).
+    import math as _math
+    for gi, cand_idxs in gap_coverage.items():
+        if not cand_idxs:
+            print(f"  WARN: gap {gi} has no eligible candidates — infeasible AFIR")
+            continue
+        gap_row = gaps_df.reset_index(drop=True).iloc[gi]
+        L = float(gap_row.get("gap_length_km", 0) or 0)
+        T = float(gap_row.get("gap_spacing_threshold_km", MAX_STATION_SPACING_KM) or MAX_STATION_SPACING_KM)
+        n_min = max(1, _math.ceil(L / T) - 1) if T > 0 else 1
+        prob += pulp.lpSum(x[i] for i in cand_idxs) >= n_min, f"afir_gap_{gi}"
+
+    # Constraint 2 — Demand satisfaction (with slack u_j)
+    seg_pairs = {}
+    for i, j, w in cov_pairs:
+        seg_pairs.setdefault(j, []).append((i, w))
+    for j in range(n_seg):
+        pairs = seg_pairs.get(j, [])
+        if not pairs:
+            # No candidate serves this segment — any unmet demand absorbed by u_j
+            prob += u[j] >= float(net_demand[j]), f"demand_noncov_{j}"
+            continue
+        prob += (
+            pulp.lpSum(w * c[i] for i, w in pairs) + u[j] >= float(net_demand[j])
+        ), f"demand_{j}"
+
+    # Constraint 4 — DSO equity (min share of total kW per DSO)
+    dso_groups = {d: [] for d in dso_min_share.keys()}
+    for i, row in cand.iterrows():
+        dso = row["dso_canonical"]
+        if dso in dso_groups:
+            dso_groups[dso].append(i)
+    total_chargers = pulp.lpSum(c[i] for i in range(n_cand))
+    for dso, share in dso_min_share.items():
+        members = dso_groups.get(dso, [])
+        if not members:
+            continue
+        prob += (
+            pulp.lpSum(c[i] for i in members) >= share * total_chargers
+        ), f"dso_min_{dso}"
+
+    # --- Solve -----------------------------------------------------------
+    solver = pulp.PULP_CBC_CMD(msg=msg, timeLimit=solver_time_limit_s)
+    status = prob.solve(solver)
+    status_str = pulp.LpStatus[status]
+    print(f"Solver status: {status_str}")
+
+    # --- Extract result --------------------------------------------------
+    selected = []
+    for i in range(n_cand):
+        xv = pulp.value(x[i]) or 0
+        if xv >= 0.5:
+            cv = int(round(pulp.value(c[i]) or 0))
+            row = cand.iloc[i]
+            selected.append({
+                "candidate_id": row["candidate_id"],
+                "latitude": float(row["latitude"]),
+                "longitude": float(row["longitude"]),
+                "route_segment": str(row["route_segment"]),
+                "n_chargers_proposed": cv,
+                "source": str(row["source"]),
+                "grid_status": str(row["grid_status"]),
+                "distributor_network": row["dso_canonical"],
+                "connection_distance_km": float(row["connection_distance_km"]),
+                "available_capacity_mw": float(row.get("available_capacity_mw", 0.0)),
+                "is_tent": bool(row.get("is_tent", False)),
+                "tent_tier": str(row.get("tent_tier", "none")),
+                "nearest_substation_id": str(row.get("nearest_substation_id", "")),
+                "fixed_cost_eur": float(row["_fixed_cost"]),
+            })
+    stations = pd.DataFrame(selected)
+    if len(stations) > 0:
+        stations = stations.sort_values(
+            ["distributor_network", "route_segment", "latitude"]
+        ).reset_index(drop=True)
+        stations["location_id"] = [f"STAV2_{i:04d}" for i in range(1, len(stations) + 1)]
+        stations["estimated_demand_kw"] = stations["n_chargers_proposed"] * 150
+        # Reorder for readability
+        cols = [
+            "location_id", "latitude", "longitude", "route_segment",
+            "n_chargers_proposed", "grid_status", "distributor_network",
+            "source", "connection_distance_km", "available_capacity_mw",
+            "is_tent", "tent_tier", "nearest_substation_id",
+            "estimated_demand_kw", "fixed_cost_eur", "candidate_id",
+        ]
+        stations = stations[cols]
+
+    # Unmet demand
+    unmet = []
+    for j in range(n_seg):
+        uv = float(pulp.value(u[j]) or 0)
+        if uv > 0.5:
+            unmet.append({
+                "segment_id": int(demand_df.iloc[j]["segment_id"]),
+                "route_segment": str(demand_df.iloc[j]["route_segment"]),
+                "unmet_chargers": uv,
+                "demand_chargers": float(demand_df.iloc[j]["n_chargers_needed"]),
+            })
+    unmet_df = pd.DataFrame(unmet)
+
+    total_kw = stations["n_chargers_proposed"].sum() * 150 if len(stations) else 0
+    dso_kw = (
+        stations.groupby("distributor_network")["n_chargers_proposed"].sum() * 150
+        if len(stations) else pd.Series(dtype=float)
+    )
+    summary = {
+        "status": status_str,
+        "n_stations": int(len(stations)),
+        "n_chargers": int(stations["n_chargers_proposed"].sum() if len(stations) else 0),
+        "total_kw": int(total_kw),
+        "total_capex_eur": float(pulp.value(prob.objective) or 0),
+        "unmet_total_chargers": float(unmet_df["unmet_chargers"].sum() if len(unmet_df) else 0),
+        "unmet_segments_count": int(len(unmet_df)),
+        "dso_kw_shares": {
+            d: float(dso_kw.get(d, 0) / total_kw) if total_kw else 0.0
+            for d in dso_min_share
+        },
+        "afir_gaps_unreachable": [
+            gi for gi, idxs in gap_coverage.items() if not idxs
+        ],
+    }
+    return {"stations": stations, "unmet": unmet_df, "summary": summary}
+

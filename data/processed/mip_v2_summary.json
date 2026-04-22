@@ -1,0 +1,16 @@
+{
+  "status": "Optimal",
+  "n_stations": 225,
+  "n_chargers": 785,
+  "total_kw": 117750,
+  "total_capex_eur": 196500000.0,
+  "unmet_total_chargers": 427.0,
+  "unmet_segments_count": 193,
+  "dso_kw_shares": {
+    "i-DE": 0.48484848484848486,
+    "Endesa": 0.41238471673254284,
+    "Viesgo": 0.10276679841897234
+  },
+  "afir_gaps_unreachable": [],
+  "afir_closer_added": 8
+}

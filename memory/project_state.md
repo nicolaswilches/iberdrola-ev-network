@@ -1,7 +1,7 @@
 # Project State
 
-**Last updated:** 2026-04-13
-**Status:** Full pipeline executed (NB01–NB10) with corrected gap logic, aligned demand sizing, safe grid consolidation, regenerated submission files, and exported visualization. Report and pitch deck remain pending.
+**Last updated:** 2026-04-22
+**Status:** Full pipeline executed (NB01–NB10) with corrected gap logic, aligned demand sizing, safe grid consolidation, regenerated submission files, and exported visualization. BI map upgraded to grid-status-first palette with congestion heatmap, TEN-T tier styling, station↔substation links, friction badges and KPI dashboard for report/pitch use. ABM animation regenerated with continuity-checked routing + path densification (0 off-corridor trip jumps; see `decisions_log.md` 2026-04-22). v2 MIP model built alongside locked greedy (`notebooks/07c_network_optimization_mip.ipynb`, `src/candidate_generation.py`, `src/run_mip_v2.py`, `place_stations_mip()` in `src/optimization.py`): 225 stations / 785 chargers / 117.8 MW / 0 AFIR gaps / 427 unmet / DSO i-DE 47% ∙ Endesa 43% ∙ Viesgo 10%. Penalty sweep traces 55 → 307 stations across €50k–€400k/unit. Locked v1 submission unchanged. Report and pitch deck remain pending.
 
 ## What is done
 
@@ -43,7 +43,7 @@
 - `output/File_2.csv` — 8 proposed stations across `A-23`, `AP-2`, `AP-9`, `N-322`, `N-433`, `N-435`, `N-502`, `N-621`
 - `output/File_3.csv` — 8 friction points; all `Congested`; valid DSOs only
 - `output/dso_investment_summary.csv` — Endesa 2.4 MW, Viesgo 0.9 MW, i-DE 0.6 MW
-- `visualization/bi_map.html` — self-contained Folium map with proposed stations, friction points, and baseline chargers
+- `visualization/bi_map.html` — self-contained deck.gl map (built by `scripts/build_bi_map.py`). Primary colour encoding is `grid_status` (Green=Sufficient / Amber=Moderate / Red=Congested) across all point layers. Additional layers: congestion heatmap underlay, TEN-T tier-styled corridors, station→substation connection lines (distance-graded), friction "!" badges on File_3 stations, KPI stat panel (proposed MW, DSO investment, AFIR gaps)
 
 ## Remaining deliverables
 

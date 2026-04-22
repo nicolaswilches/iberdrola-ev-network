@@ -1,5 +1,129 @@
 # Decisions Log
 
+## 2026-04-22 — v2 MIP (Core 4) alongside locked greedy submission
+
+**Decision:** Build `place_stations_mip()` in `src/optimization.py` and drive it from a new `notebooks/07c_network_optimization_mip.ipynb`, producing a v2 network with the four substantive constraints missing from the locked greedy (demand satisfaction, grid eligibility, DSO equity, AFIR-as-sub-slot coverage). The locked 2026-04-13 submission (8 stations, 26 chargers) is **unmodified**; v2 outputs are `_v2`-suffixed and live alongside.
+
+### What was built:
+
+1. **`src/candidate_generation.py`** — enriched candidate universe (2,238 after 2 km dedupe): 113 service areas + 1,238 upgrade-ready existing ≥50 kW sites + 87 grid-friendly substation-adjacent points + 805 regularly-spaced high-IMD points + 8 gap midpoints. Each candidate carries nearest-substation metadata (DSO, MW, distance tier) and per-source fixed cost (F1 derivative). Coverage matrix uses same-route + haversine (catchment 40 km).
+
+2. **`place_stations_mip()` in `src/optimization.py`** — PuLP+CBC MIP. Variables: `x_i ∈ {0,1}`, `c_i ∈ [2..12] · x_i`, `u_j ≥ 0` (unmet slack). Objective: minimize Capex + €200k per unmet charger. Constraints: (1) AFIR Σ x_i ≥ ceil(L/T)-1 per baseline gap; (2) per-segment demand coverage with slack; (3) grid filter (candidate has substation within 25 km, with cost penalty tiered 5/15/25/50+ km); (4) DSO kW shares i-DE ≥ 35%, Endesa ≥ 30%, Viesgo ≥ 10%.
+
+3. **Post-placement AFIR closer** — the MIP's count constraint ensures enough stations per gap but not perfect spread. `run_mip_v2.run()` re-detects gaps with the legacy `compute_coverage_gaps` on (baseline ∪ v2-stations) and closes any remainder via `place_stations_greedy` (typically 8 additions on long Core corridors). Final post-placement AFIR gaps = 0.
+
+4. **Sensitivity harness** — `mip_v2_penalty_sweep.csv` traces the Pareto curve: 55 stations @ €50k penalty / 119 @ €100k / 225 @ €200k (reference) / 307 @ €400k. The submitted greedy (8 stations) sits below €50k; the reference MIP closes ~90% of 2027 demand.
+
+### Canonical v2 outputs:
+
+- `data/processed/proposed_stations_v2.csv` (225 rows, full metadata)
+- `data/processed/stations_with_grid_status_v2.csv` (mirror)
+- `data/processed/unmet_demand_v2.csv` (193 under-covered segments, 427 charger deficit)
+- `data/processed/mip_v2_summary.json`
+- `data/processed/v1_v2_comparison.csv`
+- `data/processed/mip_v2_penalty_sweep.csv`
+- `data/processed/fig_07c_v1_v2_overlay.png`
+- `output/File_1_v2.csv` / `File_2_v2.csv` / `File_3_v2.csv` / `dso_investment_summary_v2.csv`
+
+### Impact:
+
+Unlocks the "Phase 1 → Phase 2 → Phase 3" narrative for the analytical report. v1 (locked) is the AFIR-minimum Phase 1; v2 (MIP) is the demand-driven full 2027 target. DSO investment rebalances from Endesa-heavy (v1 62% / v2 43%) to i-DE-led (v1 14% / v2 47%) — direct validation of the Iberdrola-centric pitch angle. `requirements.txt` now lists `pulp>=2.7`.
+
+---
+
+## 2026-04-22 — ABM Animation: Corridor Geometry QA and Root-Cause Fix
+
+**Decision:** Fix visible "trip jumps off corridor" artifacts in the deck.gl animation (`visualization/abm_animation/trajectories.json`) by replacing the old naive family-merge / stitch pipeline with continuity-checked routing plus a post-path densifier.
+
+### What changed:
+
+1. **OD-aware fragment selection** — `_component_covers_od()` in `export_trajectories.py` prefers a single family component that reaches both origin and destination within 5 km before falling through to stitching. Avoids `substring` crossing internal merge gaps.
+
+2. **Continuity-checked stitcher** — `_stitch_chain_fragments()` rejects any inter-fragment boundary > 3 km (hub-transition tolerance) and aborts at > 10 km. Callers fall through to multi-hop or drop the trip; no silent long-leap bridges.
+
+3. **MAD-anchored multi-hop** — multi-hop-via-Madrid routing now verifies leg1.end ≈ leg2.start ≈ MAD. If both legs terminate within 3 km of MAD they concat directly; if within 10 km an explicit MAD pivot is inserted; otherwise the trip is dropped.
+
+4. **Path densifier** — after DP simplification, `_densify_trip_path()` inserts linearly-interpolated intermediate points so no two consecutive trip coords are > 3 km apart. Safe because DP only collapses sections within ~167 m of straight; converts DP-hidden "jumps" into smooth paths while preserving original coords. Display corridors are densified to 5 km cap via `_simplify_line()`.
+
+5. **Jump-guard reject log** — any trip whose densified path still has a > 4 km inter-coord leap is dropped and logged to `visualization/abm_animation/qa_jumps.csv` for triage.
+
+6. **ABM projection fix** — `_project_onto_polyline()` in `spanish_network.py` now scales longitude deltas by `cos(mean_lat)` so dot-product projection works in metric-equivalent space. Previous raw-degree projection compressed east-west distance by ~24% at Spain's latitudes. Station ordering for all 8 submission corridors verified monotonic after the fix.
+
+7. **QA harness** — new read-only diagnostic `visualization/abm_animation/qa_trajectories.py` enforces continuity thresholds: max 4 km per trip inter-waypoint jump, 6 km per corridor-fragment internal jump.
+
+### Before / after:
+
+| Metric | Before | After |
+|---|---|---|
+| Trips exported | 4,426 | 4,499 (+73) |
+| Trips with inter-waypoint jumps > 5 km | 132 | 0 |
+| Worst single trip jump | 92.7 km (SOR→VLD on N-122) | 3.0 km |
+| Worst corridor-internal jump | 26.7 km (N-430) | 5.0 km (cap) |
+| Display corridors emitted | 432 | 248 |
+| `trajectories.json` size | 10.3 MB | 21.0 MB |
+
+**Impact:** Animation is now free of off-corridor teleports. Submission deliverables (`File_1/2/3`, `dso_investment_summary.csv`, `bi_map.html`) are unchanged — this fix is contained to `export_trajectories.py` and the `_project_onto_polyline()` helper, which is only invoked during ABM network rebuild (not during File_1/2/3 generation). File size roughly doubles due to densification; acceptable for an internal-demo artifact.
+
+---
+
+## 2026-04-22 — BI Map: Grid-Status-First Palette + Jury-Oriented Layers
+
+**Decision:** Re-pivot `visualization/bi_map.html` so the primary colour
+encoding is `grid_status` (Green=Sufficient / Amber=Moderate / Red=Congested)
+across all three point layers (substations, existing fast chargers, proposed
+stations). DSO survives via marker shape + tooltip. Add four value-add layers
+to meet the datathon's "spatial logic self-evident" BI criterion and the
+explicit bonus for additional overlays.
+
+### What changed (all in `scripts/build_bi_map.py`):
+
+1. **Palette swap** — Added `STATUS_COLORS` (RGB) and replaced DSO-based
+   `getColor` on substations + chargers + proposed markers. `DSO_COLORS` is
+   gone from the primary visual; DSO still shown in tooltip text with its
+   hex colour.
+
+2. **Proposed-station pulse** — `getFillColor` / `getLineColor` on the
+   two Scatterplot layers now read per-station `d.color`. All 8 current
+   stations render red (all Congested), which is the honest spatial story
+   — it makes "every proposed site sits on a saturated grid node" visually
+   unambiguous.
+
+3. **Station→Substation connection lines (V1)** — New `PathLayer` links
+   each proposed station to its matched substation, colour-graded by
+   `connection_distance_km`: green ≤25 km, amber 25–50 km, red >50 km.
+   Instantly surfaces the two remote sites (N-502 ≈ 30 km, AP-9 ≈ 98 km).
+
+4. **Friction badges (V2)** — `TextLayer` overlays a yellow "!" on any
+   proposed station present in `File_3.csv`. All 8 flagged today.
+
+5. **TEN-T tier styling on corridors (V3)** — Join `trajectories.json`
+   corridors to `data/processed/interurban_roads.parquet` on `Carretera`;
+   conservative "any Core → Core, else any Comprehensive → Comprehensive,
+   else General" rule. Tier drives colour + width: Core sky-blue / heavier,
+   Comprehensive brighter white / medium, General faint white / narrow.
+   Result: 82 Core / 73 Comprehensive / 93 General.
+
+6. **Congestion heatmap (V4)** — `HeatmapLayer` over all substations,
+   weighted by saturation = `max(0, 1 − cap_mw / 5)`. Rendered first
+   (below everything), red colour ramp, `intensity 0.9`, `opacity 0.55`.
+   Toggleable.
+
+7. **Dashboard + legend (V6 + compliance)** — Stat panel reorganised into
+   Network / Grid status / DSO investment groups. DSO investment rows
+   read `output/dso_investment_summary.csv` at build time (Endesa 2.7 MW,
+   Viesgo 0.9 MW, i-DE 0.6 MW, total 4.2 MW). Legend now grouped by:
+   grid status → shapes → corridor tier → link distance.
+
+**Impact:** `visualization/bi_map.html` is now a single-pane BI dashboard
+satisfying the datathon brief's required fields (geolocation, route
+segment, chargers, grid status) plus four bonus overlays. 1.38 MB
+self-contained HTML, ~60 fps rendering.
+
+**Non-goals:** submission outputs (`File_1/2/3`, `dso_investment_summary.csv`)
+are **unchanged**. Only the presentation layer moved.
+
+---
+
 ## 2026-04-13 — Final Rerun and Submission Baseline Lock
 
 **Decision:** Lock the submission pipeline to the corrected 8-gap / 8-station / 26-charger solution and regenerate every downstream artifact from NB04 through NB10.
