@@ -175,7 +175,7 @@
       </label>
       <label class="layer-row">
         <input type="checkbox" id="toggle-proposed" checked>
-        <span class="icon"><span class="pulse" style="width:12px;height:12px;display:block;"></span></span>
+        <span class="icon" id="swatch-proposed"></span>
         <span class="label">Proposed stations</span>
         <span class="count" id="count-proposed"></span>
       </label>
@@ -210,10 +210,10 @@
     <div class="legend-item"><span class="legend-line" style="background:rgba(125,211,252,0.9);height:3px;"></span><span>TEN-T Comprehensive (100 km)</span></div>
     <div class="legend-item"><span class="legend-line" style="background:rgba(125,211,252,0.9);height:1px;"></span><span>General interurban (120 km)</span></div>
 
-    <div class="legend-title">Station &rarr; Substation link</div>
-    <div class="legend-item"><span class="legend-line" style="background:#4ade80;"></span><span>&le;25 km (economic)</span></div>
-    <div class="legend-item"><span class="legend-line" style="background:#fbbf24;"></span><span>25&ndash;50 km</span></div>
-    <div class="legend-item"><span class="legend-line" style="background:#f87171;"></span><span>&gt;50 km (remote site)</span></div>
+    <div class="legend-title">Station &larr; Substation link</div>
+    <div class="legend-item"><span class="legend-line" style="background:repeating-linear-gradient(to right, #4ade80 0 4px, transparent 4px 7px);"></span><span>&le;25 km (economic)</span></div>
+    <div class="legend-item"><span class="legend-line" style="background:repeating-linear-gradient(to right, #fbbf24 0 4px, transparent 4px 7px);"></span><span>25&ndash;50 km</span></div>
+    <div class="legend-item"><span class="legend-line" style="background:repeating-linear-gradient(to right, #f87171 0 4px, transparent 4px 7px);"></span><span>&gt;50 km (remote site)</span></div>
   </div>
 
   <div id="attribution">Team Greenlabs &middot; Iberdrola Datathon 2026</div>
@@ -243,6 +243,10 @@
       el.style.width = '10px'; el.style.height = '10px'; el.style.margin = '2px';
     } else if (shape === 'line') {
       el.style.height = '3px'; el.style.margin = '5px 0';
+    } else if (shape === 'dashed-line') {
+      el.style.height = '3px'; el.style.margin = '5px 0';
+      el.style.background = `repeating-linear-gradient(to right, ${color} 0 4px, transparent 4px 7px)`;
+      return;
     } else if (shape === 'heatmap') {
       el.style.background = 'linear-gradient(90deg, rgba(248,113,113,0.15), rgba(248,113,113,0.9))';
       el.style.borderRadius = '3px';
@@ -253,9 +257,10 @@
 
   setSwatch('swatch-heatmap', '', 'heatmap');
   setSwatch('swatch-corridors', 'rgba(125,211,252,0.9)', 'line');
-  setSwatch('swatch-links', 'rgba(255,255,255,0.55)', 'line');
+  setSwatch('swatch-links', 'rgba(255,255,255,0.65)', 'dashed-line');
   setSwatch('swatch-subs', 'rgba(255,255,255,0.7)', 'triangle');
   setSwatch('swatch-chargers', 'rgba(255,255,255,0.7)', 'circle');
+  setSwatch('swatch-proposed', 'rgba(255,255,255,0.7)', 'circle');
 
   // ----- Data references -----
   const corridors = DATA.corridors || [];
@@ -442,23 +447,29 @@
       }));
     }
 
-    // 3. Station -> Substation connection lines (dotted).
+    // 3. Station <- Substation connection lines -- a TripsLayer whose head
+    //    travels substation -> station every 2.4 s, with a fading trail
+    //    behind. The line itself is the animation (no separate dots / no
+    //    static underlay). Legend stays dashed to hint at "marching flow".
     if (visible.links) {
-      layers.push(new deck.PathLayer({
+      const FLOW_MS = 2400;
+      const ct = (Date.now() % FLOW_MS) / FLOW_MS;
+      layers.push(new deck.TripsLayer({
         id: 'links',
         data: links,
-        getPath:  d => d.path,
-        getColor: d => d.color,
-        getWidth: 1400,
-        widthMinPixels: 1.2,
+        getPath:       d => [d.path[1], d.path[0]],  // substation -> station
+        getTimestamps: () => [0, 1],
+        getColor:      d => d.color,
+        getWidth:      1400,
+        widthMinPixels: 1.3,
         widthMaxPixels: 3,
+        trailLength:   0.55,
+        currentTime:   ct,
         capRounded: true,
         jointRounded: true,
         pickable: true,
         opacity: 1,
-        extensions: [new deck.PathStyleExtension({ dash: true })],
-        getDashArray: [4, 3],
-        dashJustified: true,
+        fadeTrail: true,
       }));
     }
 
