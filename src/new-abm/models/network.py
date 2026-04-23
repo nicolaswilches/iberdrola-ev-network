@@ -55,6 +55,12 @@ class RoadEdge:
     speed_limit_kmh: float = 120.0
     slope_grade: float = 0.0  # positive = uphill from→to, negative = downhill
     toll_eur: float = 0.0    # one-way toll cost in EUR for this segment
+    road_name: str = ""
+    from_road_km: float = 0.0
+    to_road_km: float = 0.0
+    source_segment_ids: Tuple[int, ...] = field(default_factory=tuple)
+    target_daily_bev_traffic_2027: float = 0.0
+    geometry_backed: bool = False
 
     @property
     def free_flow_speed_kmh(self) -> float:
@@ -128,6 +134,12 @@ class RoadNetwork:
             speed_limit_kmh=edge.speed_limit_kmh,
             slope_grade=edge.slope_grade,
             toll_eur=edge.toll_eur,
+            road_name=edge.road_name,
+            from_road_km=edge.from_road_km,
+            to_road_km=edge.to_road_km,
+            source_segment_ids=edge.source_segment_ids,
+            target_daily_bev_traffic_2027=edge.target_daily_bev_traffic_2027,
+            geometry_backed=edge.geometry_backed,
             weight=edge.travel_time_min,  # default weight = travel time (no toll)
         )
 
@@ -143,6 +155,13 @@ class RoadNetwork:
             road_type=edge.road_type,
             speed_limit_kmh=edge.speed_limit_kmh,
             slope_grade=-edge.slope_grade,
+            toll_eur=edge.toll_eur,
+            road_name=edge.road_name,
+            from_road_km=edge.to_road_km,
+            to_road_km=edge.from_road_km,
+            source_segment_ids=edge.source_segment_ids,
+            target_daily_bev_traffic_2027=edge.target_daily_bev_traffic_2027,
+            geometry_backed=edge.geometry_backed,
         )
         self.add_edge(reverse)
 
@@ -155,6 +174,7 @@ class RoadNetwork:
         origin: str,
         destination: str,
         weight: str = "travel_time_min",
+        warn_on_missing: bool = True,
     ) -> List[str]:
         """Shortest path by *weight* attribute (default: travel time).
 
@@ -163,7 +183,8 @@ class RoadNetwork:
         try:
             return nx.shortest_path(self.graph, origin, destination, weight=weight)
         except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
-            logger.warning("No path %s → %s: %s", origin, destination, exc)
+            if warn_on_missing:
+                logger.warning("No path %s → %s: %s", origin, destination, exc)
             return []
 
     def shortest_path_gc(
@@ -172,6 +193,7 @@ class RoadNetwork:
         destination: str,
         vot_eur_per_hour: float,
         max_comfortable_speed_kmh: Optional[float] = None,
+        warn_on_missing: bool = True,
     ) -> List[str]:
         """Shortest path by generalized cost: travel_time + toll_eur / vot_per_min.
 
@@ -186,7 +208,9 @@ class RoadNetwork:
         Falls back to travel-time-only routing when VoT is zero.
         """
         if vot_eur_per_hour <= 0:
-            return self.shortest_path(origin, destination)
+            return self.shortest_path(
+                origin, destination, warn_on_missing=warn_on_missing
+            )
         vot_per_min = vot_eur_per_hour / 60.0
 
         def _gc(_u: str, _v: str, d: dict) -> float:
@@ -202,7 +226,8 @@ class RoadNetwork:
         try:
             return nx.shortest_path(self.graph, origin, destination, weight=_gc)
         except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
-            logger.warning("No GC path %s → %s: %s", origin, destination, exc)
+            if warn_on_missing:
+                logger.warning("No GC path %s → %s: %s", origin, destination, exc)
             return []
 
     def shortest_path_length(

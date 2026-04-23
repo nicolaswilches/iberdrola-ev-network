@@ -82,9 +82,9 @@ def decide_to_charge_here(
     reserve_kwh = agent.usable_capacity_kwh * min_reserve_frac
     no_dest_frac = config.get("no_dest_charger_arrival_soc_fraction", 0.50)
     dest_reserve_kwh = (
-        agent.usable_capacity_kwh * no_dest_frac
-        if not agent.destination_charging_access
-        else reserve_kwh
+        reserve_kwh
+        if agent.destination_charging_access or str(agent.destination).startswith("GEO_")
+        else agent.usable_capacity_kwh * no_dest_frac
     )
 
     destination = remaining_route[-1] if remaining_route else agent.destination

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 import yaml
 
 # Add parent directory so modules import correctly
@@ -32,8 +33,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from data_generation.spanish_network import build_spain_real_network
 from data_generation.synthetic import build_spain_demo_network, export_network_to_csv
+from models.demand import generate_trips_from_calibrated_paths
 from outputs.aggregator import aggregate_results, trip_summary, station_demand_table
-from outputs.visualizer import save_all_plots
 from simulation.runner import SimulationRunner
 
 logging.basicConfig(
@@ -65,6 +66,21 @@ def main():
         "--synthetic",
         action="store_true",
         help="Force use of the synthetic demo network even if real data is available.",
+    )
+    parser.add_argument(
+        "--calibrated-path-flows",
+        type=str,
+        default=None,
+        help=(
+            "Path to abm_calibrated_path_flows.csv. When supplied, trips are "
+            "sampled from calibrated path flows and each agent follows the "
+            "calibrated node_path when feasible."
+        ),
+    )
+    parser.add_argument(
+        "--exclude-roadspan-paths",
+        action="store_true",
+        help="Exclude ROADSPAN calibration-support paths from calibrated trip sampling.",
     )
     args = parser.parse_args()
 
@@ -127,6 +143,10 @@ def main():
     print(f"      OD matrix: {len(od_matrix.pairs)} pairs, "
           f"{od_matrix.total_daily_trips():.0f} daily BEV trips")
 
+    demand_targets = None
+    if use_real and data_dir is not None and (data_dir / "demand_per_segment.csv").exists():
+        demand_targets = pd.read_csv(data_dir / "demand_per_segment.csv")
+
     # Export network CSVs for inspection
     export_dir = Path(args.output_dir) / "data"
     if network_label == "synthetic":
@@ -139,7 +159,30 @@ def main():
     print(f"\n[2/5] Generating {args.agents} trip requests...")
     rng2 = np.random.default_rng(args.seed + 1)
     peak_config = config.get("demand", {})
-    trips = od_matrix.generate_trips(rng2, num_trips=args.agents, peak_config=peak_config)
+    calibrated_path_flows_df = None
+    if args.calibrated_path_flows:
+        calibrated_path_flows_df = pd.read_csv(args.calibrated_path_flows)
+        trips = generate_trips_from_calibrated_paths(
+            args.calibrated_path_flows,
+            rng2,
+            num_trips=args.agents,
+            peak_config=peak_config,
+            include_roadspan_paths=not args.exclude_roadspan_paths,
+        )
+        scenario_name = "calibrated_paths"
+        support_count = sum(1 for t in trips if t.is_calibration_support_path)
+        print(
+            f"      Calibrated path source: {args.calibrated_path_flows}"
+        )
+        print(
+            f"      ROADSPAN support trips: {support_count} "
+            f"({'included' if not args.exclude_roadspan_paths else 'excluded'})"
+        )
+    else:
+        trips = od_matrix.generate_trips(rng2, num_trips=args.agents, peak_config=peak_config)
+        scenario_name = "baseline"
+    if not trips:
+        raise RuntimeError("No trip requests generated; check demand inputs and filters.")
     dep_times = [t.departure_time_min for t in trips]
     print(f"      Departure range: {min(dep_times):.0f}–{max(dep_times):.0f} min "
           f"({min(dep_times)/60:.1f}h–{max(dep_times)/60:.1f}h)")
@@ -151,7 +194,7 @@ def main():
     print(f"      Agents: {args.agents}, seed: {args.seed}")
     t0 = time.time()
     runner = SimulationRunner(network, stations, config)
-    results = runner.run(trips, scenario_name="baseline", seed=args.seed)
+    results = runner.run(trips, scenario_name=scenario_name, seed=args.seed)
     elapsed = time.time() - t0
     print(f"      Simulation completed in {elapsed:.1f}s")
 
@@ -189,28 +232,33 @@ def main():
     # ------------------------------------------------------------------
     # 6. Save outputs
     # ------------------------------------------------------------------
+    print(f"\n[5/5] Saving CSVs to {args.output_dir}/...")
+    out = Path(args.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    agg = aggregate_results(
+        results,
+        demand_df=demand_targets,
+        calibrated_path_flows_df=calibrated_path_flows_df,
+    )
+    for table_name, df in agg.items():
+        if not df.empty:
+            path = out / f"{scenario_name}_{table_name}.csv"
+            df.to_csv(path, index=False)
+
     if not args.no_plots:
-        print(f"\n[5/5] Saving plots and CSVs to {args.output_dir}/...")
-        out = Path(args.output_dir)
-        out.mkdir(parents=True, exist_ok=True)
+        print(f"      Saving plots to {out / 'plots'}...")
+        from outputs.visualizer import save_all_plots
 
-        # Save CSVs
-        agg = aggregate_results(results)
-        for table_name, df in agg.items():
-            if not df.empty:
-                path = out / f"baseline_{table_name}.csv"
-                df.to_csv(path, index=False)
-
-        # Save plots
         saved_plots = save_all_plots(
             network=network,
             stations=stations,
-            results_dict={"baseline": results},
+            results_dict={scenario_name: results},
             output_dir=str(out / "plots"),
         )
         print(f"      Saved {len(saved_plots)} plots")
     else:
-        print("\n[5/5] Skipping plots (--no-plots).")
+        print("      Skipping plots (--no-plots).")
 
     print("\n" + "=" * 60)
     print(" Demo complete.")

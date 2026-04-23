@@ -35,7 +35,11 @@ from models.demand import TripRequest
 from models.network import RoadNetwork
 from models.results import ResultsCollector, SimulationResults
 from models.station import ChargingStation
-from simulation.engine import vehicle_trip_process
+from simulation.engine import (
+    _record_failure_diagnostic,
+    _trip_diagnostic_kwargs,
+    vehicle_trip_process,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +141,7 @@ class SimulationRunner:
                     config=flat_config,
                     collector=collector,
                     rng=rng,
+                    od_flow_observer=od_flow_observer,
                 )
             )
 
@@ -163,7 +168,18 @@ class SimulationRunner:
                 total_distance_km=agent.total_distance_km,
                 route_node_count=len(agent.route),
                 final_soc_kwh=agent.current_soc_kwh,
+                **_trip_diagnostic_kwargs(agent, self.network),
                 failure_reason="sim_window_timeout",
+            )
+            _record_failure_diagnostic(
+                agent=agent,
+                sim_time=sim_duration,
+                status="stranded",
+                reason="sim_window_timeout",
+                network=self.network,
+                stations_by_node=self.stations_by_node,
+                config=flat_config,
+                collector=collector,
             )
 
         # --- Collect results ---
@@ -310,6 +326,12 @@ def _create_agent(
         queue_aversion=queue_aversion,
         risk_tolerance=risk_tol,
         max_comfortable_speed_kmh=comfortable_speed,
+        preferred_route=list(trip.preferred_path),
+        od_pair_id=trip.od_pair_id,
+        demand_path_id=trip.demand_path_id,
+        calibrated_daily_bev_flow=trip.calibrated_daily_bev_flow,
+        demand_weight=trip.demand_weight,
+        is_calibration_support_path=trip.is_calibration_support_path,
     )
 
 

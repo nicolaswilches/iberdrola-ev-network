@@ -92,6 +92,21 @@ def plan_route_with_stops(
     charging_stops: ordered list of ChargingStation objects the agent
                     plans to use (may be empty for short trips)
     """
+    preferred = _validated_preferred_route(agent, network)
+    if preferred:
+        stops = _plan_charging_stops(
+            agent, preferred, network, stations_by_node, config
+        )
+        if _is_stop_plan_feasible(agent, preferred, stops, network, config):
+            agent.planned_route_source = "preferred_calibrated"
+            return preferred, stops
+        agent.route_infeasible_events += 1
+        logger.debug(
+            "Agent %s: calibrated path %s infeasible, falling back to route choice.",
+            agent.agent_id,
+            agent.demand_path_id or "<unknown>",
+        )
+
     k = int(config.get("route_candidates_k", 5))
     candidates = network.k_shortest_paths_gc(
         agent.origin,
@@ -100,6 +115,7 @@ def plan_route_with_stops(
         agent.max_comfortable_speed_kmh,
         k=k,
     )
+    candidates = [route for route in candidates if is_geo_terminal_route(route)]
     if not candidates:
         logger.warning(
             "Agent %s: no path found %s -> %s",
@@ -120,17 +136,75 @@ def plan_route_with_stops(
                     "Agent %s: primary route infeasible, using candidate %d of %d.",
                     agent.agent_id, i + 1, len(candidates),
                 )
+                agent.route_infeasible_events += i
+                agent.planned_route_source = "fallback_candidate"
+            else:
+                agent.planned_route_source = "generalized_cost_primary"
             return route, stops
         if i == 0:
             primary_stops = stops
 
     # All candidates infeasible. Return the primary plan and let the engine
     # surface the strand with a clear failure_reason.
-    logger.warning(
+    agent.route_infeasible_events += len(candidates)
+    agent.planned_route_source = "infeasible_primary"
+    logger.debug(
         "Agent %s: no feasible route among %d candidates, returning primary.",
         agent.agent_id, len(candidates),
     )
     return primary_route, primary_stops
+
+
+def _validated_preferred_route(
+    agent: VehicleAgent,
+    network: RoadNetwork,
+) -> List[str]:
+    """Return the calibrated route if it is a valid graph path for this agent."""
+    route = list(getattr(agent, "preferred_route", []) or [])
+    if len(route) < 2:
+        return []
+    if route[0] != agent.origin or route[-1] != agent.destination:
+        logger.debug(
+            "Agent %s: ignoring calibrated path with endpoint mismatch.",
+            agent.agent_id,
+        )
+        return []
+    if not is_geo_terminal_route(route):
+        logger.debug(
+            "Agent %s: ignoring calibrated path with intermediate GEO boundary node.",
+            agent.agent_id,
+        )
+        return []
+    for u, v in zip(route, route[1:]):
+        attrs = network.get_edge_attrs(u, v)
+        if not attrs or not attrs.get("geometry_backed", False):
+            logger.debug(
+                "Agent %s: ignoring calibrated path with invalid edge %s -> %s.",
+                agent.agent_id, u, v,
+            )
+            return []
+    return route
+
+
+def is_geo_terminal_route(route: List[str]) -> bool:
+    """GEO boundary nodes may be route endpoints, never intermediate nodes."""
+    if len(route) <= 2:
+        return True
+    return not any(_is_geo_node(node) for node in route[1:-1])
+
+
+def _is_geo_node(node_id: str) -> bool:
+    return str(node_id).startswith("GEO_")
+
+
+def _destination_reserve_kwh(
+    agent: VehicleAgent,
+    reserve_kwh: float,
+    no_dest_charger_frac: float,
+) -> float:
+    if agent.destination_charging_access or _is_geo_node(agent.destination):
+        return reserve_kwh
+    return agent.usable_capacity_kwh * no_dest_charger_frac
 
 
 def _is_stop_plan_feasible(
@@ -147,11 +221,7 @@ def _is_stop_plan_feasible(
     reserve_frac = config.get("min_reserve_soc_fraction", 0.10)
     reserve_kwh = agent.usable_capacity_kwh * reserve_frac
     no_dest_frac = config.get("no_dest_charger_arrival_soc_fraction", 0.50)
-    dest_reserve_kwh = (
-        agent.usable_capacity_kwh * no_dest_frac
-        if not agent.destination_charging_access
-        else reserve_kwh
-    )
+    dest_reserve_kwh = _destination_reserve_kwh(agent, reserve_kwh, no_dest_frac)
 
     # Index of every planned stop in the route (by first matching node_id).
     stop_node_ids = {s.node_id for s in stops}
@@ -212,10 +282,9 @@ def _plan_charging_stops(
     comfort_frac = config.get("arrival_comfort_soc_fraction", 0.20)
     no_dest_charger_frac = config.get("no_dest_charger_arrival_soc_fraction", 0.50)
     reserve_kwh = agent.usable_capacity_kwh * min_reserve
-    if not agent.destination_charging_access:
-        dest_reserve_kwh = agent.usable_capacity_kwh * no_dest_charger_frac
-    else:
-        dest_reserve_kwh = reserve_kwh
+    dest_reserve_kwh = _destination_reserve_kwh(
+        agent, reserve_kwh, no_dest_charger_frac
+    )
     comfort_kwh = agent.usable_capacity_kwh * (min_reserve + comfort_frac)
 
     # Find all stations along the route, picking the least-loaded station at
@@ -278,7 +347,8 @@ def _plan_charging_stops(
                     break
 
         if best_idx is None:
-            logger.warning(
+            agent.route_infeasible_events += 1
+            logger.debug(
                 "Agent %s: route infeasible, no reachable station from node %s",
                 agent.agent_id, route[current_idx],
             )

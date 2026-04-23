@@ -41,6 +41,7 @@ from models.agent import VehicleAgent
 from models.network import RoadNetwork
 from models.station import ChargingStation
 from behavior.energy import compute_segment_energy
+from behavior.routing import is_geo_terminal_route
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +80,7 @@ def decide_initial_soc(
     if rng is None:
         rng = np.random.default_rng()
 
-    route = network.shortest_path_gc(agent.origin, agent.destination,
-                                     agent.value_of_time_eur_per_hour,
-                                     agent.max_comfortable_speed_kmh)
+    route = _departure_soc_route(agent, network)
     trip_distance_km = network.subpath_distance_km(route) if route else 200.0
 
     # Count charging stations reachable on the route
@@ -102,6 +101,39 @@ def decide_initial_soc(
     # home / origin before departing — a trivially observable real-world behaviour.
     soc = max(soc, _minimum_viable_soc(agent, route, stations_by_node, network, config))
     return min(soc, agent.usable_capacity_kwh)
+
+
+def _departure_soc_route(agent: VehicleAgent, network: RoadNetwork) -> List[str]:
+    """
+    Pick the route used for pre-trip SOC viability.
+
+    Calibrated trips carry a preferred path that represents the segment-demand
+    calibration surface. Use it when valid so boundary/local OD agents start
+    with enough SOC for the path they are actually asked to drive.
+    """
+    preferred = list(getattr(agent, "preferred_route", []) or [])
+    if (
+        len(preferred) >= 2
+        and preferred[0] == agent.origin
+        and preferred[-1] == agent.destination
+        and is_geo_terminal_route(preferred)
+    ):
+        valid = True
+        for u, v in zip(preferred, preferred[1:]):
+            attrs = network.get_edge_attrs(u, v)
+            if not attrs or not attrs.get("geometry_backed", False):
+                valid = False
+                break
+        if valid:
+            return preferred
+
+    route = network.shortest_path_gc(
+        agent.origin,
+        agent.destination,
+        agent.value_of_time_eur_per_hour,
+        agent.max_comfortable_speed_kmh,
+    )
+    return route if is_geo_terminal_route(route) else []
 
 
 def _home_charger_target_soc(
@@ -176,6 +208,13 @@ def _minimum_viable_soc(
     min_reserve_frac = config.get("min_reserve_soc_fraction", 0.10)
     reserve_kwh = agent.usable_capacity_kwh * min_reserve_frac
 
+    if _is_geo_node(agent.origin):
+        # GEO origins are boundary terminals. They model entry into the road
+        # system from places such as homes, logistics facilities, airports, or
+        # suburb access points, so lack of a public charger at the boundary
+        # node should not make the trip fail before departure.
+        return agent.usable_capacity_kwh
+
     cumulative_energy = 0.0
     for i in range(len(route) - 1):
         seg_energy = compute_segment_energy(
@@ -190,6 +229,10 @@ def _minimum_viable_soc(
 
     # Fallback: full usable capacity (no stations at all)
     return min(agent.usable_capacity_kwh, cumulative_energy + reserve_kwh)
+
+
+def _is_geo_node(node_id: str) -> bool:
+    return str(node_id).startswith("GEO_")
 
 
 def _no_home_charger_soc(

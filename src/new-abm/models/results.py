@@ -35,6 +35,54 @@ class ChargeEvent:
 
 
 @dataclass
+class EdgeTraversal:
+    """One agent traversal over one ABM graph edge."""
+
+    agent_id: str
+    sim_time_min: float
+    from_node: str
+    to_node: str
+    road_name: str
+    distance_km: float
+    source_segment_ids: str
+    target_daily_bev_traffic_2027: float
+    demand_weight: float = 1.0
+
+
+@dataclass
+class FailureDiagnostic:
+    """Diagnostic context for failed or stranded trips."""
+
+    agent_id: str
+    origin: str
+    destination: str
+    od_pair_id: str
+    demand_path_id: str
+    current_node: str
+    status: str
+    failure_reason: str
+    vehicle_type: str
+    battery_capacity_kwh: float
+    usable_capacity_kwh: float
+    initial_soc_kwh: float
+    current_soc_kwh: float
+    initial_soc_fraction: float
+    current_soc_fraction: float
+    consumption_kwh_per_km: float
+    home_charging_access: bool
+    destination_charging_access: bool
+    preferred_path_distance_km: float
+    actual_route_distance_km: float
+    first_reachable_station_node: str
+    first_reachable_station_distance_km: float
+    first_reachable_station_energy_kwh: float
+    reachable_station_count: int
+    route_infeasible_events: int
+    path_adherence_ratio: float
+    exact_preferred_path_match: bool
+
+
+@dataclass
 class TripRecord:
     """Summary of a completed (or failed) trip."""
 
@@ -52,6 +100,17 @@ class TripRecord:
     route_node_count: int
     initial_soc_kwh: float
     final_soc_kwh: float
+    od_pair_id: str = ""
+    demand_path_id: str = ""
+    vehicle_type: str = ""
+    initial_soc_fraction: float = 0.0
+    final_soc_fraction: float = 0.0
+    preferred_path_distance_km: float = 0.0
+    actual_route_distance_km: float = 0.0
+    path_adherence_ratio: float = 0.0
+    exact_preferred_path_match: bool = False
+    route_infeasible_events: int = 0
+    demand_weight: float = 1.0
     generalized_cost_eur: float = 0.0
     # Empty for completed trips. For failed trips, one of:
     # no_path_found | no_reachable_station | soc_depleted | sim_window_timeout
@@ -72,6 +131,8 @@ class ResultsCollector:
 
     def __init__(self) -> None:
         self._charge_events: List[ChargeEvent] = []
+        self._edge_traversals: List[EdgeTraversal] = []
+        self._failure_diagnostics: List[FailureDiagnostic] = []
         self._trip_records: List[TripRecord] = []
         self._initial_soc_by_agent: Dict[str, float] = {}
 
@@ -108,6 +169,33 @@ class ResultsCollector:
             )
         )
 
+    def record_edge_traversal(
+        self,
+        agent_id: str,
+        sim_time_min: float,
+        from_node: str,
+        to_node: str,
+        road_name: str,
+        distance_km: float,
+        source_segment_ids: str,
+        target_daily_bev_traffic_2027: float,
+        demand_weight: float = 1.0,
+    ) -> None:
+        """Called whenever an agent traverses a graph edge."""
+        self._edge_traversals.append(
+            EdgeTraversal(
+                agent_id=agent_id,
+                sim_time_min=sim_time_min,
+                from_node=from_node,
+                to_node=to_node,
+                road_name=road_name,
+                distance_km=distance_km,
+                source_segment_ids=source_segment_ids,
+                target_daily_bev_traffic_2027=target_daily_bev_traffic_2027,
+                demand_weight=demand_weight,
+            )
+        )
+
     def record_completion(
         self,
         agent_id: str,
@@ -123,11 +211,22 @@ class ResultsCollector:
         total_distance_km: float,
         route_node_count: int,
         final_soc_kwh: float,
+        od_pair_id: str = "",
+        demand_path_id: str = "",
+        vehicle_type: str = "",
+        usable_capacity_kwh: float = 0.0,
+        preferred_path_distance_km: float = 0.0,
+        actual_route_distance_km: float = 0.0,
+        path_adherence_ratio: float = 0.0,
+        exact_preferred_path_match: bool = False,
+        route_infeasible_events: int = 0,
+        demand_weight: float = 1.0,
         generalized_cost_eur: float = 0.0,
         failure_reason: str = "",
     ) -> None:
         """Called when an agent completes or fails its trip."""
         initial_soc = self._initial_soc_by_agent.get(agent_id, 0.0)
+        usable = max(float(usable_capacity_kwh or 0.0), 1e-9)
         self._trip_records.append(
             TripRecord(
                 agent_id=agent_id,
@@ -144,10 +243,28 @@ class ResultsCollector:
                 route_node_count=route_node_count,
                 initial_soc_kwh=initial_soc,
                 final_soc_kwh=final_soc_kwh,
+                od_pair_id=od_pair_id,
+                demand_path_id=demand_path_id,
+                vehicle_type=vehicle_type,
+                initial_soc_fraction=initial_soc / usable,
+                final_soc_fraction=final_soc_kwh / usable,
+                preferred_path_distance_km=preferred_path_distance_km,
+                actual_route_distance_km=actual_route_distance_km,
+                path_adherence_ratio=path_adherence_ratio,
+                exact_preferred_path_match=exact_preferred_path_match,
+                route_infeasible_events=route_infeasible_events,
+                demand_weight=demand_weight,
                 generalized_cost_eur=generalized_cost_eur,
                 failure_reason=failure_reason,
             )
         )
+
+    def record_failure_diagnostic(
+        self,
+        **kwargs: Any,
+    ) -> None:
+        """Called when an agent fails or strands with diagnostic context."""
+        self._failure_diagnostics.append(FailureDiagnostic(**kwargs))
 
     def to_results(
         self,
@@ -159,6 +276,8 @@ class ResultsCollector:
         return SimulationResults(
             scenario_name=scenario_name,
             charge_events=list(self._charge_events),
+            edge_traversals=list(self._edge_traversals),
+            failure_diagnostics=list(self._failure_diagnostics),
             trip_records=list(self._trip_records),
             stations=stations,
             sim_duration_min=sim_duration_min,
@@ -176,6 +295,8 @@ class SimulationResults:
 
     scenario_name: str
     charge_events: List[ChargeEvent]
+    edge_traversals: List[EdgeTraversal]
+    failure_diagnostics: List[FailureDiagnostic]
     trip_records: List[TripRecord]
     stations: List[Any]      # List[ChargingStation]
     sim_duration_min: float
@@ -191,6 +312,18 @@ class SimulationResults:
         return pd.DataFrame(
             [vars(e) for e in self.charge_events]
         )
+
+    def edge_traversals_df(self) -> pd.DataFrame:
+        """All graph edge traversals as a DataFrame."""
+        if not self.edge_traversals:
+            return pd.DataFrame()
+        return pd.DataFrame([vars(e) for e in self.edge_traversals])
+
+    def failure_diagnostics_df(self) -> pd.DataFrame:
+        """Failed/stranded trip diagnostic context as a DataFrame."""
+        if not self.failure_diagnostics:
+            return pd.DataFrame()
+        return pd.DataFrame([vars(e) for e in self.failure_diagnostics])
 
     def trip_records_df(self) -> pd.DataFrame:
         """All trip records as a DataFrame."""
@@ -212,6 +345,11 @@ class SimulationResults:
                     "max_power_kw": s.max_power_kw,
                     "num_connectors": s.num_connectors,
                     "price_per_kwh": s.price_per_kwh,
+                    "road_name": getattr(s, "road_name", ""),
+                    "road_km": getattr(s, "road_km", 0.0),
+                    "cluster_span_km": getattr(s, "cluster_span_km", 0.0),
+                    "physical_station_count": getattr(s, "physical_station_count", 1),
+                    "cluster_exception": getattr(s, "cluster_exception", ""),
                     "total_sessions": s.total_sessions,
                     "total_energy_kwh": s.total_energy_kwh,
                     "total_wait_min": s.total_wait_time_min,

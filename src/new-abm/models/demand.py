@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,11 @@ class TripRequest:
     od_pair_id: str = ""
     num_passengers: int = 1
     trip_purpose: str = "leisure"  # leisure | business | commute
+    demand_path_id: str = ""
+    preferred_path: Tuple[str, ...] = field(default_factory=tuple)
+    calibrated_daily_bev_flow: float = 0.0
+    demand_weight: float = 1.0
+    is_calibration_support_path: bool = False
 
     def __repr__(self) -> str:
         return (
@@ -49,6 +56,105 @@ class TripRequest:
             f"{self.origin}→{self.destination}, "
             f"dep={self.departure_time_min:.0f} min)"
         )
+
+
+def generate_trips_from_calibrated_paths(
+    path_flows_csv: str | Path,
+    rng: np.random.Generator,
+    num_trips: Optional[int] = None,
+    peak_config: Optional[Dict] = None,
+    include_roadspan_paths: bool = True,
+    min_daily_flow: float = 0.0,
+) -> List[TripRequest]:
+    """
+    Sample TripRequests from calibrated path-flow output.
+
+    The expected input is ``abm_calibrated_path_flows.csv`` from
+    ``calibration.path_demand``. Each sampled trip carries a preferred node
+    path so the simulator can reproduce the calibrated segment-flow pattern.
+    """
+    df = pd.read_csv(path_flows_csv)
+    required = {
+        "path_id",
+        "od_pair_id",
+        "origin",
+        "destination",
+        "node_path",
+        "calibrated_daily_bev_flow",
+    }
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Calibrated path file missing columns: {sorted(missing)}")
+
+    df = df.copy()
+    df["calibrated_daily_bev_flow"] = pd.to_numeric(
+        df["calibrated_daily_bev_flow"], errors="coerce"
+    ).fillna(0.0)
+    df = df[df["calibrated_daily_bev_flow"] > float(min_daily_flow)]
+    df = df[df["node_path"].fillna("").str.contains("|", regex=False)]
+    before_geo_filter = len(df)
+    df = df[df["node_path"].apply(_is_geo_terminal_path)]
+    removed_geo_paths = before_geo_filter - len(df)
+    if removed_geo_paths:
+        logger.warning(
+            "Dropped %d calibrated paths with intermediate GEO boundary nodes",
+            removed_geo_paths,
+        )
+    if not include_roadspan_paths:
+        df = df[~df["od_pair_id"].fillna("").str.startswith("ROADSPAN_")]
+
+    if df.empty:
+        logger.warning("No calibrated path rows available for trip generation")
+        return []
+
+    total = num_trips or int(round(float(df["calibrated_daily_bev_flow"].sum())))
+    if total <= 0:
+        return []
+
+    weights = df["calibrated_daily_bev_flow"].to_numpy(dtype=float).copy()
+    weights /= weights.sum()
+    path_counts = rng.multinomial(total, weights)
+    demand_weight = float(df["calibrated_daily_bev_flow"].sum()) / float(total)
+
+    trips: List[TripRequest] = []
+    trip_counter = 0
+    for row, count in zip(df.itertuples(index=False), path_counts):
+        if count <= 0:
+            continue
+        path_nodes = tuple(str(row.node_path).split("|"))
+        is_support = str(row.od_pair_id).startswith("ROADSPAN_")
+        for _ in range(int(count)):
+            dep = _sample_departure_time(rng, peak_config)
+            trips.append(
+                TripRequest(
+                    trip_id=f"CAL_TRIP_{trip_counter:05d}",
+                    origin=str(row.origin),
+                    destination=str(row.destination),
+                    departure_time_min=dep,
+                    od_pair_id=str(row.od_pair_id),
+                    trip_purpose="calibrated",
+                    demand_path_id=str(row.path_id),
+                    preferred_path=path_nodes,
+                    calibrated_daily_bev_flow=float(row.calibrated_daily_bev_flow),
+                    demand_weight=demand_weight,
+                    is_calibration_support_path=is_support,
+                )
+            )
+            trip_counter += 1
+
+    trips.sort(key=lambda t: t.departure_time_min)
+    logger.info(
+        "Generated %d trips from %d calibrated paths (%s ROADSPAN paths)",
+        len(trips), len(df), "including" if include_roadspan_paths else "excluding",
+    )
+    return trips
+
+
+def _is_geo_terminal_path(node_path: str) -> bool:
+    nodes = [node for node in str(node_path).split("|") if node]
+    if len(nodes) <= 2:
+        return True
+    return not any(str(node).startswith("GEO_") for node in nodes[1:-1])
 
 
 @dataclass

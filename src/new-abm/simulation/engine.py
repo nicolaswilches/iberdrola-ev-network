@@ -29,7 +29,7 @@ Key design choices
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 
 import simpy
 
@@ -39,7 +39,12 @@ from models.results import ResultsCollector
 from models.station import ChargingStation
 from behavior.energy import compute_segment_energy, compute_charge_duration
 from behavior.pre_trip import decide_initial_soc
-from behavior.routing import plan_route_with_stops, build_trip_waypoints, Waypoint
+from behavior.routing import (
+    build_trip_waypoints,
+    is_geo_terminal_route,
+    plan_route_with_stops,
+    Waypoint,
+)
 from behavior.station_choice import decide_charge_target
 from behavior.en_route import (
     decide_to_charge_here,
@@ -62,6 +67,7 @@ def vehicle_trip_process(
     config: Dict,
     collector: ResultsCollector,
     rng: Any,
+    od_flow_observer: Optional[Callable] = None,
 ) -> Generator:
     """
     SimPy generator for one BEV trip.
@@ -114,7 +120,12 @@ def vehicle_trip_process(
             total_distance_km=0.0,
             route_node_count=0,
             final_soc_kwh=agent.current_soc_kwh,
+            **_trip_diagnostic_kwargs(agent, network),
             failure_reason="no_path_found",
+        )
+        _record_failure_diagnostic(
+            agent, env.now, "failed_no_route", "no_path_found",
+            network, stations_by_node, config, collector,
         )
         return
 
@@ -151,12 +162,18 @@ def vehicle_trip_process(
                 # remaining SOC. Agent runs out before the next stop.
                 _record_strand(
                     agent, env.now, collector,
+                    network=network,
+                    stations_by_node=stations_by_node,
+                    config=config,
                     reason="no_reachable_station",
                 )
                 return
 
         # Drive the segment
         drive_time = network.subpath_travel_time_min(waypoint.nodes)
+        _record_edge_traversals(
+            agent, env.now, waypoint.nodes, network, collector, od_flow_observer
+        )
         yield env.timeout(drive_time)
         agent.current_soc_kwh -= segment_energy
         agent.current_soc_kwh = max(0.0, agent.current_soc_kwh)  # clamp
@@ -260,6 +277,7 @@ def vehicle_trip_process(
         total_distance_km=agent.total_distance_km,
         route_node_count=len(agent.route),
         final_soc_kwh=agent.current_soc_kwh,
+        **_trip_diagnostic_kwargs(agent, network),
     )
 
 
@@ -290,7 +308,7 @@ def _execute_detour_and_replan(
         agent.value_of_time_eur_per_hour,
         getattr(agent, "max_comfortable_speed_kmh", None),
     )
-    if not detour_path or len(detour_path) < 2:
+    if not detour_path or len(detour_path) < 2 or not is_geo_terminal_route(detour_path):
         return None
 
     detour_energy = compute_segment_energy(
@@ -310,6 +328,7 @@ def _execute_detour_and_replan(
         detour_time, detour_energy,
     )
 
+    _record_edge_traversals(agent, env.now, detour_path, network, collector)
     yield env.timeout(detour_time)
     agent.current_soc_kwh = max(0.0, agent.current_soc_kwh - detour_energy)
     agent.current_node = chosen_station.node_id
@@ -321,6 +340,8 @@ def _execute_detour_and_replan(
         agent.value_of_time_eur_per_hour,
         getattr(agent, "max_comfortable_speed_kmh", None),
     ) or [chosen_station.node_id, agent.destination]
+    if not is_geo_terminal_route(context_route):
+        context_route = [chosen_station.node_id, agent.destination]
 
     yield from _execute_charging(
         env, agent, chosen_station, context_route,
@@ -342,6 +363,8 @@ def _execute_detour_and_replan(
             agent.value_of_time_eur_per_hour,
             getattr(agent, "max_comfortable_speed_kmh", None),
         )
+        if not is_geo_terminal_route(new_route):
+            new_route = []
         new_stops = []
 
     if not new_route:
@@ -576,6 +599,7 @@ def _handle_emergency_charge(
         path_to_station, network, agent.consumption_kwh_per_km
     )
 
+    _record_edge_traversals(agent, env.now, path_to_station, network, collector)
     yield env.timeout(em_drive_time)
     agent.current_soc_kwh = max(0.0, agent.current_soc_kwh - em_energy)
     agent.current_node = station.node_id
@@ -588,10 +612,48 @@ def _handle_emergency_charge(
     return True
 
 
+def _record_edge_traversals(
+    agent: VehicleAgent,
+    sim_time_min: float,
+    nodes: List[str],
+    network: RoadNetwork,
+    collector: Optional[ResultsCollector],
+    od_flow_observer: Optional[Callable] = None,
+) -> None:
+    """Record each graph edge traversed by an agent for flow calibration."""
+    for from_node, to_node, attrs in network.iter_edges_on_path(nodes):
+        road_name = str(attrs.get("road_name", ""))
+        distance_km = float(attrs.get("distance_km", 0.0) or 0.0)
+        segment_ids = attrs.get("source_segment_ids", ())
+        if isinstance(segment_ids, (list, tuple)):
+            segment_ids_str = "|".join(str(x) for x in segment_ids)
+        else:
+            segment_ids_str = str(segment_ids)
+        target_flow = float(attrs.get("target_daily_bev_traffic_2027", 0.0) or 0.0)
+        if collector is not None:
+            collector.record_edge_traversal(
+                agent_id=agent.agent_id,
+                sim_time_min=sim_time_min,
+                from_node=from_node,
+                to_node=to_node,
+                road_name=road_name,
+                distance_km=distance_km,
+                source_segment_ids=segment_ids_str,
+                target_daily_bev_traffic_2027=target_flow,
+                demand_weight=agent.demand_weight,
+            )
+        agent.traversed_edges.append((from_node, to_node))
+        if od_flow_observer is not None:
+            od_flow_observer(road_name, agent.agent_id, sim_time_min)
+
+
 def _record_strand(
     agent: VehicleAgent,
     sim_time: float,
     collector: ResultsCollector,
+    network: RoadNetwork,
+    stations_by_node: Dict[str, List[ChargingStation]],
+    config: Dict,
     reason: str = "soc_depleted",
 ) -> None:
     agent.status = "stranded"
@@ -611,5 +673,152 @@ def _record_strand(
         total_distance_km=agent.total_distance_km,
         route_node_count=len(agent.route),
         final_soc_kwh=agent.current_soc_kwh,
+        **_trip_diagnostic_kwargs(agent, network),
         failure_reason=reason,
     )
+    _record_failure_diagnostic(
+        agent, sim_time, "stranded", reason,
+        network, stations_by_node, config, collector,
+    )
+
+
+def _trip_diagnostic_kwargs(
+    agent: VehicleAgent,
+    network: Optional[RoadNetwork],
+) -> Dict[str, Any]:
+    preferred_distance, actual_distance, adherence, exact = _path_adherence(
+        agent, network
+    )
+    return {
+        "od_pair_id": agent.od_pair_id,
+        "demand_path_id": agent.demand_path_id,
+        "vehicle_type": agent.vehicle_type,
+        "usable_capacity_kwh": agent.usable_capacity_kwh,
+        "preferred_path_distance_km": preferred_distance,
+        "actual_route_distance_km": actual_distance,
+        "path_adherence_ratio": adherence,
+        "exact_preferred_path_match": exact,
+        "route_infeasible_events": agent.route_infeasible_events,
+        "demand_weight": agent.demand_weight,
+    }
+
+
+def _path_adherence(
+    agent: VehicleAgent,
+    network: Optional[RoadNetwork],
+) -> Tuple[float, float, float, bool]:
+    preferred = list(getattr(agent, "preferred_route", []) or [])
+    traversed = list(getattr(agent, "traversed_edges", []) or [])
+    preferred_edges = list(zip(preferred, preferred[1:])) if len(preferred) >= 2 else []
+
+    preferred_distance = (
+        network.subpath_distance_km(preferred)
+        if network is not None and len(preferred) >= 2
+        else 0.0
+    )
+    actual_route = list(getattr(agent, "route", []) or [])
+    actual_distance = (
+        network.subpath_distance_km(actual_route)
+        if network is not None and len(actual_route) >= 2
+        else agent.total_distance_km
+    )
+
+    if not preferred_edges:
+        return preferred_distance, actual_distance, 0.0, False
+
+    preferred_set = set(preferred_edges)
+    traversed_set = set(traversed)
+    adherence = len(preferred_set & traversed_set) / max(1, len(preferred_set))
+    exact = traversed == preferred_edges
+    return preferred_distance, actual_distance, float(adherence), bool(exact)
+
+
+def _record_failure_diagnostic(
+    agent: VehicleAgent,
+    sim_time: float,
+    status: str,
+    reason: str,
+    network: Optional[RoadNetwork],
+    stations_by_node: Dict[str, List[ChargingStation]],
+    config: Dict,
+    collector: ResultsCollector,
+) -> None:
+    preferred_distance, actual_distance, adherence, exact = _path_adherence(
+        agent, network
+    )
+    station_node, station_dist, station_energy, reachable_count = (
+        _nearest_reachable_station(agent, network, stations_by_node, config)
+    )
+    initial_soc = collector._initial_soc_by_agent.get(agent.agent_id, 0.0)
+    usable = max(agent.usable_capacity_kwh, 1e-9)
+    collector.record_failure_diagnostic(
+        agent_id=agent.agent_id,
+        origin=agent.origin,
+        destination=agent.destination,
+        od_pair_id=agent.od_pair_id,
+        demand_path_id=agent.demand_path_id,
+        current_node=agent.current_node,
+        status=status,
+        failure_reason=reason,
+        vehicle_type=agent.vehicle_type,
+        battery_capacity_kwh=agent.battery_capacity_kwh,
+        usable_capacity_kwh=agent.usable_capacity_kwh,
+        initial_soc_kwh=initial_soc,
+        current_soc_kwh=agent.current_soc_kwh,
+        initial_soc_fraction=initial_soc / usable,
+        current_soc_fraction=agent.current_soc_kwh / usable,
+        consumption_kwh_per_km=agent.consumption_kwh_per_km,
+        home_charging_access=agent.home_charging_access,
+        destination_charging_access=agent.destination_charging_access,
+        preferred_path_distance_km=preferred_distance,
+        actual_route_distance_km=actual_distance,
+        first_reachable_station_node=station_node,
+        first_reachable_station_distance_km=station_dist,
+        first_reachable_station_energy_kwh=station_energy,
+        reachable_station_count=reachable_count,
+        route_infeasible_events=agent.route_infeasible_events,
+        path_adherence_ratio=adherence,
+        exact_preferred_path_match=exact,
+    )
+
+
+def _nearest_reachable_station(
+    agent: VehicleAgent,
+    network: Optional[RoadNetwork],
+    stations_by_node: Dict[str, List[ChargingStation]],
+    config: Dict,
+) -> Tuple[str, float, float, int]:
+    if network is None or not agent.current_node:
+        return "", 0.0, 0.0, 0
+
+    reserve = agent.usable_capacity_kwh * float(
+        config.get("min_reserve_soc_fraction", 0.10)
+    )
+    best_node = ""
+    best_dist = float("inf")
+    best_energy = 0.0
+    reachable = 0
+
+    for node_id in stations_by_node:
+        path = network.shortest_path_gc(
+            agent.current_node,
+            node_id,
+            agent.value_of_time_eur_per_hour,
+            getattr(agent, "max_comfortable_speed_kmh", None),
+            warn_on_missing=False,
+        )
+        if not path or len(path) < 2:
+            continue
+        energy = compute_segment_energy(path, network, agent.consumption_kwh_per_km)
+        if agent.current_soc_kwh - energy < reserve:
+            continue
+        reachable += 1
+        dist = network.subpath_distance_km(path)
+        if dist < best_dist:
+            best_node = node_id
+            best_dist = dist
+            best_energy = energy
+
+    if not best_node:
+        return "", 0.0, 0.0, reachable
+    return best_node, float(best_dist), float(best_energy), reachable

@@ -75,6 +75,15 @@ class VehicleAgent:
     total_distance_km: float = field(default=0.0)
 
     route: List[str] = field(default_factory=list)
+    preferred_route: List[str] = field(default_factory=list)
+    od_pair_id: str = field(default="")
+    demand_path_id: str = field(default="")
+    calibrated_daily_bev_flow: float = field(default=0.0)
+    demand_weight: float = field(default=1.0)
+    is_calibration_support_path: bool = field(default=False)
+    route_infeasible_events: int = field(default=0)
+    planned_route_source: str = field(default="")
+    traversed_edges: List[tuple[str, str]] = field(default_factory=list)
     charging_plan_station_ids: List[str] = field(default_factory=list)
     charge_events: List[Dict[str, Any]] = field(default_factory=list)
 

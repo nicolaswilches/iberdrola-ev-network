@@ -44,6 +44,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -335,6 +336,148 @@ _TOLL_EUR_PER_KM: Dict[str, float] = {
 _DEFAULT_PRICE_EUR_KWH = 0.40
 # Default power for proposed stations (project constant)
 _PROPOSED_STATION_POWER_KW = 150.0
+_MAX_CLUSTER_SPAN_KM = 10.0
+_MAX_CLUSTER_CONNECTORS = 24
+_STATION_PROJECTION_TOLERANCE_KM = 5.0
+_CITY_PROJECTION_TOLERANCE_KM = 75.0
+
+
+@dataclass(frozen=True)
+class RoadProjection:
+    """Projection of a point onto a real road geometry."""
+
+    road_km: float
+    distance_km: float
+
+
+@dataclass(frozen=True)
+class EdgeGeometry:
+    """Geometry-backed attributes for one ABM graph edge."""
+
+    distance_km: float
+    from_road_km: float
+    to_road_km: float
+    source_segment_ids: Tuple[int, ...]
+    target_daily_bev_traffic_2027: float
+
+
+class RoadGeometryIndex:
+    """Strict geometry lookup for ABM real-road distances and traffic targets."""
+
+    def __init__(self, roads_gdf, demand_df: pd.DataFrame) -> None:
+        try:
+            import geopandas as gpd
+            from shapely.geometry import Point
+            from shapely.ops import linemerge, unary_union
+        except ImportError as exc:
+            raise RuntimeError("geopandas and shapely are required for real ABM geometry") from exc
+
+        self._gpd = gpd
+        self._point_cls = Point
+        roads = roads_gdf.copy()
+        if roads.crs is None:
+            roads = roads.set_crs("EPSG:4326")
+        roads = roads.to_crs("EPSG:25830")
+
+        demand_cols = ["segment_id", "daily_bev_traffic_2027"]
+        demand = demand_df[demand_cols].copy() if set(demand_cols).issubset(demand_df.columns) else pd.DataFrame(columns=demand_cols)
+        roads = roads.merge(demand, on="segment_id", how="left")
+        roads["daily_bev_traffic_2027"] = roads["daily_bev_traffic_2027"].fillna(0.0)
+
+        self._roads: Dict[str, dict] = {}
+        for road_name, grp in roads.groupby("Carretera"):
+            if grp.empty:
+                continue
+            union_geom = unary_union(grp.geometry)
+            merged = union_geom if union_geom.geom_type == "LineString" else linemerge(union_geom)
+            if merged.is_empty:
+                continue
+            segs = []
+            for _, row in grp.iterrows():
+                geom = row.geometry
+                start_m = float(merged.project(geom.interpolate(0.0, normalized=True)))
+                end_m = float(merged.project(geom.interpolate(1.0, normalized=True)))
+                lo_m, hi_m = sorted((start_m, end_m))
+                segs.append({
+                    "segment_id": int(row["segment_id"]),
+                    "start_km": lo_m / 1000.0,
+                    "end_km": hi_m / 1000.0,
+                    "length_km": max(float(row.get("length_km", 0.0) or 0.0), (hi_m - lo_m) / 1000.0),
+                    "daily_bev_traffic_2027": float(row.get("daily_bev_traffic_2027", 0.0) or 0.0),
+                })
+            self._roads[str(road_name)] = {
+                "geometry": merged,
+                "segments": segs,
+                "length_km": float(merged.length / 1000.0),
+            }
+
+    @property
+    def roads(self) -> set[str]:
+        return set(self._roads)
+
+    def project(self, road_name: str, lat: float, lon: float, tolerance_km: float) -> RoadProjection:
+        road = self._roads.get(str(road_name))
+        if road is None:
+            raise ValueError(f"missing geometry for road {road_name}")
+
+        import geopandas as gpd
+
+        pt = gpd.GeoSeries([self._point_cls(lon, lat)], crs="EPSG:4326").to_crs("EPSG:25830").iloc[0]
+        geom = road["geometry"]
+        road_m = float(geom.project(pt))
+        distance_km = float(geom.distance(pt) / 1000.0)
+        if distance_km > tolerance_km:
+            raise ValueError(
+                f"point projects {distance_km:.1f} km from {road_name}, "
+                f"above tolerance {tolerance_km:.1f} km"
+            )
+        return RoadProjection(road_km=road_m / 1000.0, distance_km=distance_km)
+
+    def edge(self, road_name: str, from_km: float, to_km: float) -> EdgeGeometry:
+        road = self._roads.get(str(road_name))
+        if road is None:
+            raise ValueError(f"missing geometry for road {road_name}")
+        lo, hi = sorted((float(from_km), float(to_km)))
+        distance_km = hi - lo
+        if distance_km <= 0.01:
+            raise ValueError(f"zero-length geometry edge on {road_name}: {from_km:.3f}->{to_km:.3f}")
+
+        segment_ids: List[int] = []
+        weighted_flow = 0.0
+        overlap_total = 0.0
+        for seg in road["segments"]:
+            seg_lo = min(seg["start_km"], seg["end_km"])
+            seg_hi = max(seg["start_km"], seg["end_km"])
+            overlap = max(0.0, min(hi, seg_hi) - max(lo, seg_lo))
+            if overlap <= 0:
+                continue
+            segment_ids.append(seg["segment_id"])
+            weighted_flow += overlap * seg["daily_bev_traffic_2027"]
+            overlap_total += overlap
+        target_flow = weighted_flow / overlap_total if overlap_total > 0 else 0.0
+        return EdgeGeometry(
+            distance_km=distance_km,
+            from_road_km=float(from_km),
+            to_road_km=float(to_km),
+            source_segment_ids=tuple(sorted(set(segment_ids))),
+            target_daily_bev_traffic_2027=float(target_flow),
+        )
+
+    def length_km(self, road_name: str) -> float:
+        road = self._roads.get(str(road_name))
+        if road is None:
+            raise ValueError(f"missing geometry for road {road_name}")
+        return float(road["length_km"])
+
+    def point_at_km(self, road_name: str, road_km: float) -> Tuple[float, float]:
+        """Return (lat, lon) at an along-road km position."""
+        road = self._roads.get(str(road_name))
+        if road is None:
+            raise ValueError(f"missing geometry for road {road_name}")
+        geom = road["geometry"]
+        point = geom.interpolate(max(0.0, min(float(road_km), self.length_km(road_name))) * 1000.0)
+        wgs = self._gpd.GeoSeries([point], crs="EPSG:25830").to_crs("EPSG:4326").iloc[0]
+        return float(wgs.y), float(wgs.x)
 
 
 # ---------------------------------------------------------------------------
@@ -488,15 +631,17 @@ def build_spain_real_network(
     data_dir = Path(data_dir)
     segments_df, demand_df, chargers_df, proposed_df = _load_data(data_dir)
 
+    roads_gdf = _load_roads_geometry(data_dir)
+    geometry_index = RoadGeometryIndex(roads_gdf, demand_df)
+
     # 1. Road corridors: try geometry-based auto-builder, fall back to static list
-    auto_corridors = _build_road_corridors(
-        data_dir / _ROADS_PARQUET_FILENAME
-    )
+    auto_corridors = _build_road_corridors(data_dir / _ROADS_PARQUET_FILENAME)
     if auto_corridors:
         corridors: Dict[str, List[str]] = auto_corridors
     else:
         logger.info("Using static _ROAD_CORRIDORS (%d corridors)", len(_ROAD_CORRIDORS))
         corridors = {name: cities for name, cities in _ROAD_CORRIDORS}
+    corridors = _add_geometry_fallback_corridors(corridors, geometry_index)
 
     # 2. Build city-only graph (nodes, no edges yet)
     network = _build_city_graph()
@@ -509,7 +654,9 @@ def build_spain_real_network(
         corridors=corridors,
         include_proposed=include_proposed_stations,
         cluster_stations_per_group=cluster_stations_per_group,
+        geometry_index=geometry_index,
     )
+    _validate_geometry_backed_graph(network)
 
     # 4. OD matrix calibrated to 2027 BEV demand
     od_matrix = _build_od_matrix(demand_df, network, corridors)
@@ -522,6 +669,70 @@ def build_spain_real_network(
         len(od_matrix.pairs), od_matrix.total_daily_trips(),
     )
     return network, stations, od_matrix
+
+
+def _validate_geometry_backed_graph(network: RoadNetwork) -> None:
+    """Fail real-mode builds if any ABM edge is not backed by road geometry."""
+    failures = []
+    for u, v, attrs in network.graph.edges(data=True):
+        if not attrs.get("geometry_backed", False):
+            failures.append((u, v, "missing geometry_backed flag"))
+        elif not math.isfinite(float(attrs.get("distance_km", 0.0))) or float(attrs.get("distance_km", 0.0)) <= 0:
+            failures.append((u, v, "non-positive distance"))
+        elif not attrs.get("road_name"):
+            failures.append((u, v, "missing road_name"))
+    if failures:
+        preview = "; ".join(f"{u}->{v}: {reason}" for u, v, reason in failures[:10])
+        raise RuntimeError(
+            f"ABM real network has {len(failures)} non-geometry-backed edges. "
+            f"First failures: {preview}"
+        )
+
+
+def _geo_node_id(road_name: str, suffix: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9]+", "_", road_name).strip("_")
+    return f"GEO_{clean}_{suffix}"
+
+
+def _add_geometry_fallback_corridors(
+    corridors: Dict[str, List[str]],
+    geometry_index: RoadGeometryIndex,
+) -> Dict[str, List[str]]:
+    """Ensure every processed geometry road has synthetic full-road endpoints."""
+    out = {road: list(nodes) for road, nodes in corridors.items()}
+    for road_name in sorted(geometry_index.roads):
+        start_id = _geo_node_id(road_name, "START")
+        end_id = _geo_node_id(road_name, "END")
+        nodes = out.setdefault(road_name, [])
+        if start_id not in nodes:
+            nodes.insert(0, start_id)
+        if end_id not in nodes:
+            nodes.append(end_id)
+    return out
+
+
+def _ensure_geo_endpoint_node(
+    network: RoadNetwork,
+    geometry_index: RoadGeometryIndex,
+    road_name: str,
+    suffix: str,
+) -> str:
+    node_id = _geo_node_id(road_name, suffix)
+    if node_id in network.nodes:
+        return node_id
+    road_km = 0.0 if suffix == "START" else geometry_index.length_km(road_name)
+    lat, lon = geometry_index.point_at_km(road_name, road_km)
+    network.add_node(
+        RoadNode(
+            node_id=node_id,
+            name=f"{road_name} geometry {suffix.lower()}",
+            latitude=lat,
+            longitude=lon,
+            node_type="junction",
+            population=0,
+        )
+    )
+    return node_id
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +768,19 @@ def _load_data(
         len(segments_df), len(demand_df), len(chargers_df), len(proposed_df),
     )
     return segments_df, demand_df, chargers_df, proposed_df
+
+
+def _load_roads_geometry(data_dir: Path):
+    """Load processed interurban road geometry required by strict real ABM mode."""
+    try:
+        import geopandas as gpd
+    except ImportError as exc:
+        raise RuntimeError("geopandas is required to build the real ABM network") from exc
+
+    path = data_dir / _ROADS_PARQUET_FILENAME
+    if not path.exists():
+        raise FileNotFoundError(f"Missing road geometry at {path}")
+    return gpd.read_parquet(path)
 
 
 # ---------------------------------------------------------------------------
@@ -605,6 +829,7 @@ def _build_corridors_and_stations(
     corridors: Dict[str, List[str]],
     include_proposed: bool,
     cluster_stations_per_group: int,
+    geometry_index: RoadGeometryIndex,
 ) -> List[ChargingStation]:
     """
     For every corridor in *corridors*:
@@ -624,8 +849,23 @@ def _build_corridors_and_stations(
     added_edges: set = set()
 
     for road_name, city_chain in corridors.items():
-        # --- verify all cities exist ---
-        city_chain = [c for c in city_chain if c in network.nodes]
+        if road_name not in geometry_index.roads:
+            logger.info("Corridor %s skipped: no processed road geometry", road_name)
+            continue
+        # --- verify all cities exist; synthetic GEO endpoints are added lazily ---
+        materialized_chain: List[str] = []
+        for node_id in city_chain:
+            if node_id in network.nodes:
+                materialized_chain.append(node_id)
+            elif node_id == _geo_node_id(road_name, "START"):
+                materialized_chain.append(
+                    _ensure_geo_endpoint_node(network, geometry_index, road_name, "START")
+                )
+            elif node_id == _geo_node_id(road_name, "END"):
+                materialized_chain.append(
+                    _ensure_geo_endpoint_node(network, geometry_index, road_name, "END")
+                )
+        city_chain = materialized_chain
         if len(city_chain) < 2:
             logger.debug("Corridor %s skipped: fewer than 2 valid cities", road_name)
             continue
@@ -638,8 +878,7 @@ def _build_corridors_and_stations(
         charger_wps, charger_stations = _cluster_chargers_on_road(
             road_name=road_name,
             chargers_df=chargers_df,
-            city_chain=city_chain,
-            network=network,
+            geometry_index=geometry_index,
             cluster_stations_per_group=cluster_stations_per_group,
         )
         waypoints.extend(charger_wps)
@@ -650,8 +889,7 @@ def _build_corridors_and_stations(
             prop_wps, prop_stations = _get_proposed_on_road(
                 road_name=road_name,
                 proposed_df=proposed_df,
-                city_chain=city_chain,
-                network=network,
+                geometry_index=geometry_index,
             )
             waypoints.extend(prop_wps)
             all_stations.extend(prop_stations)
@@ -676,13 +914,25 @@ def _build_corridors_and_stations(
 
         # Assign km positions to city nodes along the corridor
         city_positions: List[Tuple[float, str]] = []
-        cumulative_km = 0.0
-        for i, nid in enumerate(city_chain):
-            city_positions.append((cumulative_km, nid))
-            if i < len(city_chain) - 1:
-                cumulative_km += _get_segment_km(
-                    city_chain[i], city_chain[i + 1], network
+        for nid in city_chain:
+            node = network.nodes[nid]
+            try:
+                proj = geometry_index.project(
+                    road_name, node.latitude, node.longitude, _CITY_PROJECTION_TOLERANCE_KM
                 )
+            except ValueError as exc:
+                logger.info("Skipping city %s on %s: %s", nid, road_name, exc)
+                continue
+            city_positions.append((proj.road_km, nid))
+
+        if len(city_positions) < 2:
+            logger.info("Corridor %s using synthetic geometry endpoints", road_name)
+            start_id = _ensure_geo_endpoint_node(network, geometry_index, road_name, "START")
+            end_id = _ensure_geo_endpoint_node(network, geometry_index, road_name, "END")
+            city_positions = [
+                (0.0, start_id),
+                (geometry_index.length_km(road_name), end_id),
+            ]
 
         # Merge cities + waypoints, sort by km position
         all_nodes: List[Tuple[float, str]] = city_positions + [
@@ -706,7 +956,11 @@ def _build_corridors_and_stations(
         for i in range(len(deduped) - 1):
             km_a, nid_a = deduped[i]
             km_b, nid_b = deduped[i + 1]
-            seg_km = max(km_b - km_a, 0.5)   # guard against zero-length
+            if abs(km_b - km_a) <= 0.01:
+                logger.debug("Skipping near-zero edge on %s: %s -> %s", road_name, nid_a, nid_b)
+                continue
+            geom_edge = geometry_index.edge(road_name, km_a, km_b)
+            seg_km = geom_edge.distance_km
             travel_time = seg_km / speed * 60.0
 
             edge_key = (nid_a, nid_b, road_name)
@@ -725,6 +979,12 @@ def _build_corridors_and_stations(
                 speed_limit_kmh=speed,
                 slope_grade=0.0,
                 toll_eur=seg_km * toll_rate,
+                road_name=road_name,
+                from_road_km=geom_edge.from_road_km,
+                to_road_km=geom_edge.to_road_km,
+                source_segment_ids=geom_edge.source_segment_ids,
+                target_daily_bev_traffic_2027=geom_edge.target_daily_bev_traffic_2027,
+                geometry_backed=True,
             )
             try:
                 network.add_undirected_road(edge)
@@ -746,13 +1006,11 @@ def _normalise_road(name: str) -> str:
     """
     Normalise road name for fuzzy matching.
 
-    AP-X and A-X are different physical roads (parallel autopista vs autovia),
-    so they are NOT collapsed. Only directional suffixes are stripped:
-      - Cardinal markers N/S/E/W on shared routes (e.g. A-7S -> A-7).
-      - AP-9 sub-variants: the F (fork) and V (variant) suffixes on AP-9
-        refer to sections of the same autopista (e.g. AP-9F -> AP-9).
+    AP-X, A-X, and suffixed variants present in the processed geometry are
+    kept distinct so strict geometry projection cannot assign chargers to a
+    different physical road. Only AP-9 F/V variants are merged.
     """
-    name = name.strip().rstrip("NSEWnsew")
+    name = name.strip()
     # AP-9 has known F and V sub-routes that belong to the same corridor.
     name = re.sub(r'^(AP-9)[FVfv]$', r'\1', name)
     return name
@@ -761,15 +1019,15 @@ def _normalise_road(name: str) -> str:
 def _cluster_chargers_on_road(
     road_name: str,
     chargers_df: pd.DataFrame,
-    city_chain: List[str],
-    network: RoadNetwork,
+    geometry_index: RoadGeometryIndex,
     cluster_stations_per_group: int = 10,
 ) -> Tuple[List[Tuple[float, str, float, float]], List[ChargingStation]]:
     """
-    Cluster baseline chargers on *road_name* into dynamic-sized groups.
+    Cluster baseline chargers on *road_name* by true along-road position.
 
-    Small roads (≤ cluster_stations_per_group stations) get full resolution.
-    Larger roads get ceil(n / cluster_stations_per_group) clusters.
+    Clusters are capped at 10 km road span and 24 connectors. A single
+    physical station over the connector cap remains one waypoint and is
+    flagged via dynamic metadata on the ChargingStation object.
     """
     if "nearest_road" not in chargers_df.columns:
         return [], []
@@ -782,51 +1040,101 @@ def _cluster_chargers_on_road(
     if road_ch.empty:
         return [], []
 
-    if "segment_id" in road_ch.columns:
-        road_ch = road_ch.sort_values("segment_id").reset_index(drop=True)
-
-    import math
-    n_stations = len(road_ch)
-    # Floor of 16 preserves the previous resolution on small/medium roads while
-    # scaling clusters up on heavy corridors (e.g. A-7 with 772 stations → 78).
-    n_clusters = min(
-        n_stations,
-        max(16, math.ceil(n_stations / cluster_stations_per_group)),
-    )
-
-    # Assign cluster label by equal-size quantile split
-    road_ch["_cluster"] = (
-        road_ch.index * n_clusters // len(road_ch)
-    ).astype(int)
+    road_ch = road_ch.copy()
+    projected_rows = []
+    skipped = 0
+    for _, row in road_ch.iterrows():
+        try:
+            proj = geometry_index.project(
+                road_name, float(row["latitude"]), float(row["longitude"]),
+                _STATION_PROJECTION_TOLERANCE_KM
+            )
+        except ValueError:
+            skipped += 1
+            continue
+        row = row.copy()
+        row["_road_km"] = proj.road_km
+        projected_rows.append(row)
+    if skipped:
+        logger.info("Skipped %d baseline chargers on %s outside projection tolerance", skipped, road_name)
+    if not projected_rows:
+        return [], []
+    road_ch = pd.DataFrame(projected_rows)
+    road_ch = road_ch.sort_values("_road_km").reset_index(drop=True)
 
     waypoints: List[Tuple[float, str, float, float]] = []
     stations: List[ChargingStation] = []
 
-    for cid, grp in road_ch.groupby("_cluster"):
+    clusters: List[pd.DataFrame] = []
+    current_rows = []
+    current_connectors = 0
+    current_start_km: Optional[float] = None
+
+    for _, row in road_ch.iterrows():
+        connectors = int(row.get("n_connectors", 2) if not pd.isna(row.get("n_connectors", 2)) else 2)
+        connectors = max(1, connectors)
+        road_km = float(row["_road_km"])
+        single_over_cap = connectors > _MAX_CLUSTER_CONNECTORS
+
+        should_flush = False
+        if current_rows and current_start_km is not None:
+            span_exceeded = road_km - current_start_km > _MAX_CLUSTER_SPAN_KM
+            cap_exceeded = current_connectors + connectors > _MAX_CLUSTER_CONNECTORS
+            should_flush = span_exceeded or cap_exceeded or single_over_cap
+        if should_flush:
+            clusters.append(pd.DataFrame(current_rows))
+            current_rows = []
+            current_connectors = 0
+            current_start_km = None
+
+        current_rows.append(row)
+        current_connectors += connectors
+        current_start_km = road_km if current_start_km is None else current_start_km
+
+        if single_over_cap:
+            clusters.append(pd.DataFrame(current_rows))
+            current_rows = []
+            current_connectors = 0
+            current_start_km = None
+
+    if current_rows:
+        clusters.append(pd.DataFrame(current_rows))
+
+    for cid, grp in enumerate(clusters):
         lat = float(grp["latitude"].median())
         lon = float(grp["longitude"].median())
         n_connectors = int(grp["n_connectors"].fillna(2).astype(int).sum())
         n_connectors = max(1, n_connectors)
         max_power = float(grp["max_power_kw"].fillna(50).max())
 
-        km_pos = _project_onto_polyline(lat, lon, city_chain, network)
+        km_pos = float(grp["_road_km"].median())
         node_id = f"{road_name}_EC{cid:03d}"
         station_id = f"EC_{road_name}_{cid:03d}"
+        span_km = float(grp["_road_km"].max() - grp["_road_km"].min())
+        exception = (
+            "single_station_over_cap"
+            if len(grp) == 1 and n_connectors > _MAX_CLUSTER_CONNECTORS
+            else ""
+        )
 
         waypoints.append((km_pos, node_id, lat, lon))
-        stations.append(
-            ChargingStation(
-                station_id=station_id,
-                node_id=node_id,
-                name=f"{road_name} existing cluster {cid}",
-                latitude=lat,
-                longitude=lon,
-                max_power_kw=max_power,
-                num_connectors=n_connectors,
-                price_per_kwh=_DEFAULT_PRICE_EUR_KWH,
-                reliability=0.95,
-            )
+        station = ChargingStation(
+            station_id=station_id,
+            node_id=node_id,
+            name=f"{road_name} existing cluster {cid}",
+            latitude=lat,
+            longitude=lon,
+            max_power_kw=max_power,
+            num_connectors=n_connectors,
+            price_per_kwh=_DEFAULT_PRICE_EUR_KWH,
+            reliability=0.95,
         )
+        station.road_name = road_name
+        station.road_km = km_pos
+        station.cluster_span_km = span_km
+        station.physical_station_count = int(len(grp))
+        station.cluster_exception = exception
+        stations.append(station)
 
     return waypoints, stations
 
@@ -838,8 +1146,7 @@ def _cluster_chargers_on_road(
 def _get_proposed_on_road(
     road_name: str,
     proposed_df: pd.DataFrame,
-    city_chain: List[str],
-    network: RoadNetwork,
+    geometry_index: RoadGeometryIndex,
 ) -> Tuple[List[Tuple[float, str, float, float]], List[ChargingStation]]:
     """
     Return waypoint descriptors + ChargingStation objects for any proposed
@@ -860,22 +1167,28 @@ def _get_proposed_on_road(
         node_id = str(row["location_id"])   # e.g. "STA_0001"
         n_chargers = int(row.get("n_chargers_proposed", 4))
 
-        km_pos = _project_onto_polyline(lat, lon, city_chain, network)
+        km_pos = geometry_index.project(
+            road_name, lat, lon, _STATION_PROJECTION_TOLERANCE_KM
+        ).road_km
 
         waypoints.append((km_pos, node_id, lat, lon))
-        stations.append(
-            ChargingStation(
-                station_id=node_id,
-                node_id=node_id,
-                name=f"Proposed {road_name} ({node_id})",
-                latitude=lat,
-                longitude=lon,
-                max_power_kw=_PROPOSED_STATION_POWER_KW,
-                num_connectors=n_chargers,
-                price_per_kwh=_DEFAULT_PRICE_EUR_KWH,
-                reliability=0.95,
-            )
+        station = ChargingStation(
+            station_id=node_id,
+            node_id=node_id,
+            name=f"Proposed {road_name} ({node_id})",
+            latitude=lat,
+            longitude=lon,
+            max_power_kw=_PROPOSED_STATION_POWER_KW,
+            num_connectors=n_chargers,
+            price_per_kwh=_DEFAULT_PRICE_EUR_KWH,
+            reliability=0.95,
         )
+        station.road_name = road_name
+        station.road_km = km_pos
+        station.cluster_span_km = 0.0
+        station.physical_station_count = 1
+        station.cluster_exception = ""
+        stations.append(station)
 
     return waypoints, stations
 
