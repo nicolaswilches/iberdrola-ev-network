@@ -1,5 +1,55 @@
 # Decisions Log
 
+## 2026-04-24 — Municipality-native OD calibration refactor in `src/new-abm/`
+
+**Decision:** Stop relying on the coarse 54-hub abstraction for calibration diagnostics and build a municipality-attached demand/routing layer on top of the processed/Hermes road geometry. Keep the current hub-based artifacts available, but move municipality calibration to a stitched graph where municipalities are real nodes and OD demand is sourced from the raw municipality parquet.
+
+### What changed:
+
+1. **Municipality demand base** — restricted demand nodes to the `2,435` mainland municipalities that actually appear in the raw overnight municipality OD parquet (out of `7,975` mainland municipalities). Roads remain national in scope; the demand-node layer is filtered, not the road geometry.
+
+2. **Explicit people→BEV conversion** — replaced the old global OD-rescaling shortcut with:
+   - `car_mode_share = 0.849`
+   - `occupancy = 1.74`
+   - `vehicle_trips = people * 0.849 / 1.74`
+   - `bev_trips_2027 = vehicle_trips * EV_PENETRATION_RATE * BEV_FRACTION`
+
+3. **Stitched municipality-road graph** — processed segments are no longer isolated `START -> END` links. The graph now includes:
+   - shared road junction nodes from clustered segment endpoints
+   - same-road gap bridges between adjacent processed segments
+   - inter-road exchange nodes at geometric intersections / near-road joins
+   - municipality endpoint attachments where possible
+   - nearest-road anchor nodes for municipalities not sitting on a segment endpoint
+
+4. **Candidate generation fix** — geometry-backed municipality paths are now kept as calibration candidates even when they do not traverse a calibrated `segment_id`. This closed the last stitched-graph blind spot and yielded `1000 / 1000` candidate-covered ODs for the top-1000 slice.
+
+5. **Diagnostics layer expanded** — added segment/road OD-coverage diagnostics, competition diagnostics, OD-flow calibration export, hotspot reporter, and municipality-road graph audit CLI.
+
+### Key diagnostics from the stitched municipality graph:
+
+- `2435` municipality nodes
+- `1295` processed road segments
+- `1379` road junction nodes
+- `1261` road exchange nodes
+- `1867` road anchor nodes
+- `5` weakly connected components
+- `0` unreachable municipality nodes
+- top-1000 OD reachability improved from `149` no-path ODs before stitching to `0`
+
+### Calibration diagnosis:
+
+- The municipality calibration is not yet production-quality.
+- Even on the stitched graph with `8` paths/OD, the current top-1000 run only covers `728 / 1295` target segments (`70.5%` of target flow) and only represents `~15.2%` of total municipality BEV OD demand (`14.9k / 97.7k`).
+- Candidate diversity is still shallow: `68.2%` of ODs have exactly one candidate path; `83.0%` have at most two.
+- OD-conservation sweep (`0.00 → 0.50`) behaved as expected:
+  - stronger OD conservation improves OD WMAPE monotonically
+  - but degrades segment WMAPE monotonically
+  - this is a demand/candidate coverage problem more than a pure solver-rule problem
+
+### Implication:
+
+The next step is not tighter optimization rules. It is to scale the municipality OD set and enrich candidate diversity so the solver has enough demand mass and routing flexibility to explain the segment targets.
+
 ## 2026-04-22 — v2 MIP (Core 4) alongside locked greedy submission
 
 **Decision:** Build `place_stations_mip()` in `src/optimization.py` and drive it from a new `notebooks/07c_network_optimization_mip.ipynb`, producing a v2 network with the four substantive constraints missing from the locked greedy (demand satisfaction, grid eligibility, DSO equity, AFIR-as-sub-slot coverage). The locked 2026-04-13 submission (8 stations, 26 chargers) is **unmodified**; v2 outputs are `_v2`-suffixed and live alongside.

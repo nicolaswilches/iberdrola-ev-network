@@ -14,6 +14,8 @@ EV_FLEET_DEMAND_BASE = EV_FLEET_2027
 BEV_FRACTION = 0.60                 # 60% of EV fleet are BEVs; PHEVs don't need highway fast charging (A4)
 TOTAL_VEHICLE_FLEET = 35_000_000    # Spain light vehicle fleet 2027 estimate (E3)
 EV_PENETRATION_RATE = EV_FLEET_DEMAND_BASE / TOTAL_VEHICLE_FLEET  # Mainline 2027 demand penetration rate (E3)
+INTERURBAN_PRIVATE_CAR_MODE_SHARE = 0.849  # 84.9% private-vehicle share in interurban terrestrial passenger travel
+INTERURBAN_PRIVATE_VEHICLE_OCCUPANCY = 1.74  # Ministry/OTLE interurban private-vehicle occupancy
 
 # === EV AUTONOMY ===
 AVG_EV_RANGE_KM = 340               # WLTP average range, IEA GEVO 2025 (A1)

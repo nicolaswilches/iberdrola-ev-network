@@ -27,6 +27,22 @@ iberdrola-ev-network/
 │   ├── grid_analysis.py        ✅ Grid consolidation + status logic
 │   └── data_loading.py         ✅ CSV / parquet locale helpers
 │
+├── src/new-abm/                # New ABM + municipality calibration workstream
+│   ├── calibration/
+│   │   └── path_demand.py      ✅ Segment/road OD diagnostics, OD-conservation term, municipality candidate fixes
+│   ├── data_generation/
+│   │   ├── spanish_network.py  ✅ Hub OD prior + official municipality / ministry ingestion helpers
+│   │   └── municipality_graph.py  ✅ Municipality-attached stitched road graph builder
+│   ├── tools/
+│   │   ├── calibrate_path_demand.py               ✅ Hub/corridor calibration CLI
+│   │   ├── calibrate_municipality_path_demand.py  ✅ Municipality calibration CLI
+│   │   ├── audit_municipality_road_graph.py       ✅ Municipality-road graph audit/export
+│   │   └── report_calibration_hotspots.py         ✅ Hotspot diagnostic reporter
+│   └── tests/
+│       ├── test_path_demand.py
+│       ├── test_spanish_network_od_prior.py
+│       └── test_municipality_graph.py
+│
 ├── data/
 │   ├── raw/                    # Original downloads
 │   └── processed/              # Regenerated pipeline artifacts
@@ -62,6 +78,7 @@ iberdrola-ev-network/
 │   ├── decisions_log.md
 │   ├── blockers.md
 │   ├── lessons_learned.md
+│   ├── abm_scaling_task.md
 │   └── project_structure.md
 │
 ├── CLAUDE.md

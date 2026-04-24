@@ -1,6 +1,6 @@
 # Task Board
 
-**Last updated:** 2026-04-22
+**Last updated:** 2026-04-24
 
 ## Done
 
@@ -34,4 +34,15 @@
 
 ## ABM Scaling (new-abm)
 
-- [ ] Fix stranding and queue overflow in `src/new-abm/` at 627k agents — see `memory/abm_scaling_task.md` for full debugging plan and root-cause breakdown
+- [x] Build municipality-attached road graph from official municipality geometry/reference and processed/Hermes road geometry
+- [x] Restrict municipality demand nodes to the `2,435` municipalities covered by the raw OD parquet
+- [x] Stitch processed road segments into a routable graph with same-road continuity and inter-road exchange nodes
+- [x] Attach municipalities directly to stitched road endpoints or via nearest-road anchors
+- [x] Export municipality-road graph diagnostics and road/segment OD-coverage diagnostics
+- [x] Make municipality OD conversion explicit: `people -> car travelers -> vehicle trips -> 2027 BEV trips`
+- [x] Restore candidate reachability for the top-1000 municipality OD slice (`1000 / 1000` now have at least one candidate)
+- [x] Add soft OD conservation term to the municipality calibration CLI and run a weight sweep
+- [ ] Increase calibrated municipality OD scope beyond the current top-1000 slice so calibration covers most of the `97.7k` BEV OD total, not only `14.9k`
+- [ ] Increase candidate diversity on hotspot corridors; current stitched sample still has `68.2%` of ODs with exactly one candidate path
+- [ ] Re-run municipality calibration on the larger OD set and re-evaluate segment/OD fit before more solver-rule changes
+- [ ] Resume 627k-agent runtime debugging after municipality demand generation is credible enough to feed the simulator

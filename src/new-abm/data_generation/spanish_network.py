@@ -43,7 +43,9 @@ from __future__ import annotations
 
 import logging
 import math
+import json
 import re
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -59,6 +61,14 @@ logger = logging.getLogger(__name__)
 
 # Name of the roads geometry file produced by NB03 (relative to data/processed/)
 _ROADS_PARQUET_FILENAME = "interurban_roads.parquet"
+_OD_PRIOR_RAW_RELATIVE_PATH = Path("raw") / "trips_people_overnight_pyspainmobility" / "Pernoctaciones_municipios_2022-01-01_2022-01-06_v2.parquet"
+_MUNICIPALITY_REFERENCE_RELATIVE_PATH = Path("raw") / "additional" / "ine_population" / "ine_population_municipal_2025.csv"
+_CNIG_NGMEP_ZIP_RELATIVE_PATH = Path("raw") / "additional" / "cnig_ngmep" / "BD_MUNICIPIOS-ENTIDADES.ZIP"
+_CNIG_NGMEP_MUNICIPALITIES_FILENAME = "MUNICIPIOS.csv"
+_PROVINCES_REFERENCE_FILENAME = "provinces.geojson"
+_HYBRID_PRIOR_MIN_MAPPED_FLOW_SHARE = 0.20
+_HYBRID_PRIOR_MAJOR_MISSING_TOP_N = 25
+_NON_MAINLAND_PROVINCES = {"07", "35", "38", "51", "52"}
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +138,63 @@ _CITY_NODES: List[Tuple] = [
     # Aragón
     ("HUS", "Huesca",                  42.137, -0.408, "city",    53_000),  # A-23
 ]
+
+_CITY_NODE_MUNICIPALITY_CODES: Dict[str, str] = {
+    "MAD": "28079",  # Madrid
+    "BCN": "08019",  # Barcelona
+    "VAL": "46250",  # Valencia
+    "SEV": "41091",  # Sevilla
+    "BIL": "48020",  # Bilbao
+    "ZAR": "50297",  # Zaragoza
+    "MAL": "29067",  # Málaga
+    "MUR": "30030",  # Murcia
+    "VLD": "47186",  # Valladolid
+    "ALI": "03014",  # Alicante / Alacant
+    "GRN": "18087",  # Granada
+    "COR": "14021",  # Córdoba
+    "BUR": "09059",  # Burgos
+    "PMP": "31201",  # Pamplona / Iruña
+    "SSB": "20069",  # Donostia / San Sebastián
+    "VIT": "01059",  # Vitoria-Gasteiz
+    "LLE": "25120",  # Lleida
+    "TAR": "43148",  # Tarragona
+    "CAS": "12040",  # Castelló / Castellón de la Plana
+    "ALB": "02003",  # Albacete
+    "TER": "44216",  # Teruel
+    "ACO": "15030",  # A Coruña
+    "SCQ": "15078",  # Santiago de Compostela
+    "VIG": "36057",  # Vigo
+    "JAE": "23050",  # Jaén
+    "BAD": "06015",  # Badajoz
+    "MER": "06083",  # Mérida
+    "HUE": "21041",  # Huelva
+    "AVL": "05019",  # Ávila
+    "TAL": "45165",  # Talavera de la Reina
+    "PAL": "34120",  # Palencia
+    "STD": "39075",  # Santander
+    "LOG": "26089",  # Logroño
+    "LEO": "24089",  # León
+    "OVI": "33044",  # Oviedo
+    "GIJ": "33024",  # Gijón
+    "PON": "24115",  # Ponferrada
+    "LUG": "27028",  # Lugo
+    "OUR": "32054",  # Ourense
+    "GIR": "17079",  # Girona
+    "ALM": "04013",  # Almería
+    "CAR": "30016",  # Cartagena
+    "ALG": "11004",  # Algeciras
+    "JER": "11020",  # Jerez de la Frontera
+    "CDZ": "11012",  # Cádiz
+    "SAL": "37274",  # Salamanca
+    "CAC": "10037",  # Cáceres
+    "ZAM": "49275",  # Zamora
+    "GUA": "19130",  # Guadalajara
+    "CUE": "16078",  # Cuenca
+    "SEG": "40194",  # Segovia
+    "SOR": "42173",  # Soria
+    "CRE": "13034",  # Ciudad Real
+    "HUS": "22125",  # Huesca
+}
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +667,7 @@ def build_spain_real_network(
     rng: Optional[np.random.Generator] = None,
     include_proposed_stations: bool = True,
     cluster_stations_per_group: int = 10,
+    od_debug_dir: Path | None = None,
 ) -> Tuple[RoadNetwork, List[ChargingStation], ODMatrix]:
     """
     Build the real Spanish interurban network from processed pipeline data.
@@ -620,6 +688,8 @@ def build_spain_real_network(
         than this many stations get full resolution (one node per station).
         Larger roads get ``ceil(n_stations / cluster_stations_per_group)``
         clusters.  Default 10 balances accuracy with graph size.
+    od_debug_dir:
+        Optional directory for OD audit and hybrid-prior debug artifacts.
 
     Returns
     -------
@@ -659,7 +729,13 @@ def build_spain_real_network(
     _validate_geometry_backed_graph(network)
 
     # 4. OD matrix calibrated to 2027 BEV demand
-    od_matrix = _build_od_matrix(demand_df, network, corridors)
+    od_matrix = _build_od_matrix(
+        demand_df,
+        network,
+        corridors,
+        data_dir=data_dir,
+        debug_dir=od_debug_dir,
+    )
 
     logger.info(
         "Real network ready: %d nodes, %d directed edges, %d stations, "
@@ -768,6 +844,653 @@ def _load_data(
         len(segments_df), len(demand_df), len(chargers_df), len(proposed_df),
     )
     return segments_df, demand_df, chargers_df, proposed_df
+
+
+def _base_municipality_code(raw_code: object) -> str:
+    match = re.match(r"^(\d{5})", str(raw_code or "").strip())
+    return match.group(1) if match else ""
+
+
+def _province_code_from_municipality_code(raw_code: object) -> str:
+    code = _base_municipality_code(raw_code)
+    return code[:2] if len(code) == 5 else ""
+
+
+def _is_mainland_municipality(code: object) -> bool:
+    code_str = str(code or "").strip()
+    return len(code_str) == 5 and code_str[:2] not in _NON_MAINLAND_PROVINCES
+
+
+def _json_safe(value: object) -> object:
+    if pd.isna(value):
+        return None
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    return value
+
+
+def _city_node_municipality_frame() -> pd.DataFrame:
+    rows = []
+    for node_id, display_name, lat, lon, node_type, population in _CITY_NODES:
+        if node_type != "city":
+            continue
+        municipality_code = str(_CITY_NODE_MUNICIPALITY_CODES.get(str(node_id), "")).zfill(5)
+        rows.append({
+            "node_id": str(node_id),
+            "display_name": str(display_name),
+            "municipality_code": municipality_code,
+            "province_code": municipality_code[:2],
+            "latitude": float(lat),
+            "longitude": float(lon),
+            "node_population": int(population),
+        })
+    return pd.DataFrame(rows)
+
+
+def _parse_cnig_municipality_code(raw_code: object) -> str:
+    digits = re.sub(r"\D", "", str(raw_code or "").strip())
+    if not digits:
+        return ""
+    try:
+        return str(int(digits) // 1_000_000).zfill(5)
+    except ValueError:
+        return ""
+
+
+def _parse_decimal_series(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(
+        series.astype(str).str.replace(",", ".", regex=False),
+        errors="coerce",
+    )
+
+
+def _load_official_municipality_reference(
+    raw_dir: Path,
+    municipality_reference_path: Path | None = None,
+) -> pd.DataFrame:
+    zip_path = Path(raw_dir) / _CNIG_NGMEP_ZIP_RELATIVE_PATH
+    if not zip_path.exists():
+        raise FileNotFoundError(f"Missing CNIG municipality reference at {zip_path}")
+
+    with zipfile.ZipFile(zip_path) as zf:
+        with zf.open(_CNIG_NGMEP_MUNICIPALITIES_FILENAME) as fh:
+            official_df = pd.read_csv(fh, sep=";", encoding="latin1")
+
+    official_df = official_df.rename(columns={
+        "COD_PROV": "province_code",
+        "PROVINCIA": "provincia",
+        "NOMBRE_ACTUAL": "nombre",
+        "POBLACION_MUNI": "official_population",
+        "LONGITUD_ETRS89_REGCAN95": "longitude",
+        "LATITUD_ETRS89_REGCAN95": "latitude",
+        "ORIGENCOOR": "coordinate_origin",
+    })
+    official_df["municipality_code"] = official_df["COD_INE"].map(_parse_cnig_municipality_code)
+    official_df["province_code"] = official_df["province_code"].astype(str).str.zfill(2)
+    official_df["longitude"] = _parse_decimal_series(official_df["longitude"])
+    official_df["latitude"] = _parse_decimal_series(official_df["latitude"])
+    official_df["official_population"] = pd.to_numeric(official_df["official_population"], errors="coerce")
+    official_df = official_df[[
+        "municipality_code",
+        "province_code",
+        "nombre",
+        "provincia",
+        "official_population",
+        "latitude",
+        "longitude",
+        "coordinate_origin",
+    ]].copy()
+    official_df = official_df[official_df["municipality_code"].astype(str).str.len() == 5]
+    official_df = official_df.drop_duplicates(subset=["municipality_code"], keep="first")
+    official_df["coordinate_source"] = "cnig_ngmep_official_point"
+
+    if municipality_reference_path is not None and Path(municipality_reference_path).exists():
+        population_df = pd.read_csv(municipality_reference_path)
+        population_df["municipality_code"] = population_df["municipality_code"].astype(str).str.zfill(5)
+        population_df["province_code"] = population_df["cpro"].astype(str).str.zfill(2)
+        population_df = population_df[[
+            "municipality_code",
+            "province_code",
+            "nombre",
+            "provincia",
+            "pob_2025",
+        ]].copy()
+        official_df = official_df.merge(
+            population_df,
+            on="municipality_code",
+            how="left",
+            suffixes=("", "_ine"),
+        )
+        for col in ("province_code", "nombre", "provincia"):
+            official_df[col] = official_df[col].fillna(official_df[f"{col}_ine"])
+            official_df = official_df.drop(columns=[f"{col}_ine"])
+    else:
+        official_df["pob_2025"] = np.nan
+
+    official_df["province_code"] = official_df["province_code"].astype(str).str.zfill(2)
+    official_df["pob_2025"] = pd.to_numeric(official_df["pob_2025"], errors="coerce")
+    official_df["pob_2025"] = official_df["pob_2025"].fillna(official_df["official_population"])
+    return official_df
+
+
+def _attach_nearest_road_anchor(
+    municipality_df: pd.DataFrame,
+    roads_gdf,
+) -> pd.DataFrame:
+    try:
+        import geopandas as gpd
+        from shapely.ops import nearest_points
+    except ImportError as exc:
+        raise RuntimeError("geopandas and shapely are required for municipality road alignment") from exc
+
+    municipalities = municipality_df.copy()
+    valid = municipalities[
+        municipalities["latitude"].notna()
+        & municipalities["longitude"].notna()
+    ][["municipality_code", "latitude", "longitude"]].copy()
+    if valid.empty:
+        municipalities["nearest_road"] = ""
+        municipalities["nearest_road_segment_id"] = np.nan
+        municipalities["nearest_road_distance_km"] = np.nan
+        municipalities["road_anchor_latitude"] = np.nan
+        municipalities["road_anchor_longitude"] = np.nan
+        return municipalities
+
+    point_gdf = gpd.GeoDataFrame(
+        valid,
+        geometry=gpd.points_from_xy(valid["longitude"], valid["latitude"]),
+        crs="EPSG:4326",
+    ).to_crs(epsg=3857)
+    roads_metric = roads_gdf.to_crs(epsg=3857)[["Carretera", "segment_id", "geometry"]].copy()
+    joined = gpd.sjoin_nearest(
+        point_gdf,
+        roads_metric,
+        how="left",
+        distance_col="nearest_road_distance_m",
+    )
+    road_geom_by_index = roads_metric["geometry"]
+    snapped_points = []
+    for row in joined.itertuples(index=False):
+        road_geom = road_geom_by_index.loc[row.index_right] if pd.notna(row.index_right) else None
+        snapped_points.append(
+            nearest_points(row.geometry, road_geom)[1] if road_geom is not None else None
+        )
+    snapped_gs = gpd.GeoSeries(snapped_points, crs=roads_metric.crs).to_crs(epsg=4326)
+    joined = joined.assign(
+        nearest_road=joined["Carretera"].fillna("").astype(str),
+        nearest_road_segment_id=joined["segment_id"],
+        nearest_road_distance_km=pd.to_numeric(joined["nearest_road_distance_m"], errors="coerce") / 1000.0,
+        road_anchor_latitude=snapped_gs.y.astype(float),
+        road_anchor_longitude=snapped_gs.x.astype(float),
+    )
+    joined = joined[[
+        "municipality_code",
+        "nearest_road",
+        "nearest_road_segment_id",
+        "nearest_road_distance_km",
+        "road_anchor_latitude",
+        "road_anchor_longitude",
+    ]].copy()
+    return municipalities.merge(joined, on="municipality_code", how="left")
+
+
+def _load_province_centroid_frame(data_dir: Path) -> pd.DataFrame:
+    try:
+        import geopandas as gpd
+    except ImportError as exc:
+        raise RuntimeError("geopandas is required to build the municipality hub crosswalk") from exc
+
+    path = Path(data_dir) / _PROVINCES_REFERENCE_FILENAME
+    if not path.exists():
+        raise FileNotFoundError(f"Missing province boundaries at {path}")
+
+    gdf = gpd.read_file(path)
+    if gdf.empty:
+        return pd.DataFrame(columns=["province_code", "province_name", "centroid_lat", "centroid_lon"])
+    projected = gdf.to_crs(epsg=3857)
+    centroids = projected.geometry.centroid.to_crs(epsg=4326)
+    return pd.DataFrame({
+        "province_code": gdf["cod_prov"].astype(str).str.zfill(2),
+        "province_name": gdf["name"].astype(str),
+        "centroid_lat": centroids.y.astype(float),
+        "centroid_lon": centroids.x.astype(float),
+    })
+
+
+def _build_municipality_hub_crosswalk(
+    node_df: pd.DataFrame,
+    municipality_df: pd.DataFrame,
+    province_centroid_df: pd.DataFrame | None = None,
+    roads_gdf=None,
+) -> pd.DataFrame:
+    municipalities = municipality_df.copy()
+    municipalities["municipality_code"] = municipalities["municipality_code"].astype(str).str.zfill(5)
+    if "province_code" not in municipalities.columns:
+        if "cpro" in municipalities.columns:
+            municipalities["province_code"] = municipalities["cpro"].astype(str).str.zfill(2)
+        else:
+            municipalities["province_code"] = municipalities["municipality_code"].astype(str).str[:2]
+    else:
+        municipalities["province_code"] = municipalities["province_code"].astype(str).str.zfill(2)
+    if province_centroid_df is not None and not province_centroid_df.empty:
+        municipalities = municipalities.merge(province_centroid_df, on="province_code", how="left")
+    else:
+        municipalities["province_name"] = municipalities.get("provincia", "")
+        municipalities["centroid_lat"] = np.nan
+        municipalities["centroid_lon"] = np.nan
+
+    if roads_gdf is not None and "nearest_road" not in municipalities.columns:
+        municipalities = _attach_nearest_road_anchor(municipalities, roads_gdf)
+
+    for col in (
+        "latitude",
+        "longitude",
+        "road_anchor_latitude",
+        "road_anchor_longitude",
+        "nearest_road_distance_km",
+    ):
+        if col not in municipalities.columns:
+            municipalities[col] = np.nan
+    for col in ("nearest_road", "nearest_road_segment_id"):
+        if col not in municipalities.columns:
+            municipalities[col] = ""
+
+    municipalities["reference_latitude"] = municipalities["road_anchor_latitude"].where(
+        municipalities["road_anchor_latitude"].notna(),
+        municipalities["latitude"],
+    )
+    municipalities["reference_longitude"] = municipalities["road_anchor_longitude"].where(
+        municipalities["road_anchor_longitude"].notna(),
+        municipalities["longitude"],
+    )
+    municipalities["reference_source"] = np.where(
+        municipalities["road_anchor_latitude"].notna() & municipalities["road_anchor_longitude"].notna(),
+        "road_aligned_official_coordinate",
+        np.where(
+            municipalities["latitude"].notna() & municipalities["longitude"].notna(),
+            "official_coordinate",
+            "province_centroid",
+        ),
+    )
+    municipalities["reference_latitude"] = municipalities["reference_latitude"].where(
+        municipalities["reference_latitude"].notna(),
+        municipalities["centroid_lat"],
+    )
+    municipalities["reference_longitude"] = municipalities["reference_longitude"].where(
+        municipalities["reference_longitude"].notna(),
+        municipalities["centroid_lon"],
+    )
+
+    nodes = node_df.copy()
+    nodes["municipality_code"] = nodes["municipality_code"].astype(str).str.zfill(5)
+    nodes["province_code"] = nodes["province_code"].astype(str).str.zfill(2)
+    exact_by_code = dict(zip(nodes["municipality_code"], nodes["node_id"]))
+    exact_name_by_code = dict(zip(nodes["municipality_code"], nodes["display_name"]))
+    same_province_hubs = {
+        province_code: frame.copy()
+        for province_code, frame in nodes.groupby("province_code", dropna=False)
+    }
+
+    rows: list[dict] = []
+    for row in municipalities.itertuples(index=False):
+        municipality_code = str(row.municipality_code)
+        province_code = str(getattr(row, "province_code", "") or "").zfill(2)
+        assigned_node = ""
+        assigned_name = ""
+        assignment_rule = ""
+        assignment_distance_km = np.nan
+        runner_up_node = ""
+        runner_up_distance_km = np.nan
+        is_exact = municipality_code in exact_by_code
+
+        if is_exact:
+            assigned_node = str(exact_by_code[municipality_code])
+            assigned_name = str(exact_name_by_code[municipality_code])
+            assignment_rule = "exact_hub_municipality"
+            assignment_distance_km = 0.0
+        else:
+            reference_source = str(getattr(row, "reference_source", "") or "")
+            candidate_hubs = same_province_hubs.get(province_code)
+            if candidate_hubs is not None and not candidate_hubs.empty:
+                assignment_rule = f"same_province_{reference_source}_nearest_hub"
+            else:
+                candidate_hubs = nodes
+                assignment_rule = f"{reference_source}_nearest_hub"
+            reference_lat = getattr(row, "reference_latitude", np.nan)
+            reference_lon = getattr(row, "reference_longitude", np.nan)
+            if pd.notna(reference_lat) and pd.notna(reference_lon) and not candidate_hubs.empty:
+                ranked = candidate_hubs.copy()
+                ranked["distance_km"] = ranked.apply(
+                    lambda hub: _haversine_km(
+                        float(reference_lat),
+                        float(reference_lon),
+                        float(hub["latitude"]),
+                        float(hub["longitude"]),
+                    ),
+                    axis=1,
+                )
+                ranked = ranked.sort_values(["distance_km", "node_id"])
+                best = ranked.iloc[0]
+                assigned_node = str(best["node_id"])
+                assigned_name = str(best["display_name"])
+                assignment_distance_km = float(best["distance_km"])
+                if len(ranked) > 1:
+                    runner_up = ranked.iloc[1]
+                    runner_up_node = str(runner_up["node_id"])
+                    runner_up_distance_km = float(runner_up["distance_km"])
+            else:
+                assignment_rule = "unassigned_missing_reference_coordinate"
+
+        rows.append({
+            "municipality_code": municipality_code,
+            "province_code": province_code,
+            "municipality_name": str(getattr(row, "nombre", "") or ""),
+            "province_name": str(getattr(row, "provincia", "") or getattr(row, "province_name", "") or ""),
+            "municipality_population": _json_safe(getattr(row, "pob_2025", np.nan)),
+            "official_latitude": _json_safe(getattr(row, "latitude", np.nan)),
+            "official_longitude": _json_safe(getattr(row, "longitude", np.nan)),
+            "reference_latitude": _json_safe(getattr(row, "reference_latitude", np.nan)),
+            "reference_longitude": _json_safe(getattr(row, "reference_longitude", np.nan)),
+            "reference_source": str(getattr(row, "reference_source", "") or ""),
+            "nearest_road": str(getattr(row, "nearest_road", "") or ""),
+            "nearest_road_segment_id": _json_safe(getattr(row, "nearest_road_segment_id", np.nan)),
+            "nearest_road_distance_km": _json_safe(getattr(row, "nearest_road_distance_km", np.nan)),
+            "road_anchor_latitude": _json_safe(getattr(row, "road_anchor_latitude", np.nan)),
+            "road_anchor_longitude": _json_safe(getattr(row, "road_anchor_longitude", np.nan)),
+            "assigned_node": assigned_node,
+            "assigned_node_name": assigned_name,
+            "assignment_rule": assignment_rule,
+            "assignment_distance_km": assignment_distance_km,
+            "runner_up_node": runner_up_node,
+            "runner_up_distance_km": runner_up_distance_km,
+            "distance_gap_km": (
+                float(runner_up_distance_km - assignment_distance_km)
+                if pd.notna(assignment_distance_km) and pd.notna(runner_up_distance_km)
+                else np.nan
+            ),
+            "is_exact_hub_municipality": bool(is_exact),
+        })
+    return pd.DataFrame(rows)
+
+
+def _evaluate_hybrid_hub_prior(
+    node_df: pd.DataFrame,
+    municipality_df: pd.DataFrame,
+    travel_df: pd.DataFrame,
+    crosswalk_df: pd.DataFrame,
+    mapped_flow_share_threshold: float = _HYBRID_PRIOR_MIN_MAPPED_FLOW_SHARE,
+    major_missing_top_n: int = _HYBRID_PRIOR_MAJOR_MISSING_TOP_N,
+) -> dict:
+    node_map = node_df.merge(
+        municipality_df[["municipality_code", "nombre", "provincia", "pob_2025"]],
+        on="municipality_code",
+        how="left",
+    ).rename(columns={
+        "nombre": "municipality_name",
+        "provincia": "municipality_province",
+        "pob_2025": "municipality_population",
+    })
+    crosswalk = crosswalk_df.copy()
+    crosswalk["municipality_code"] = crosswalk["municipality_code"].astype(str).str.zfill(5)
+    assigned_node_by_code = dict(zip(crosswalk["municipality_code"], crosswalk["assigned_node"]))
+    exact_flag_by_code = dict(zip(crosswalk["municipality_code"], crosswalk["is_exact_hub_municipality"]))
+
+    travel = travel_df.copy()
+    for col in ("residence_area", "overnight_stay_area"):
+        travel[col] = travel[col].map(_base_municipality_code)
+    travel = travel[
+        travel["residence_area"].map(_is_mainland_municipality)
+        & travel["overnight_stay_area"].map(_is_mainland_municipality)
+    ].copy()
+    travel["people"] = pd.to_numeric(travel["people"], errors="coerce").fillna(0.0)
+    travel = travel[travel["people"] > 0.0]
+
+    if travel.empty:
+        summary = {
+            "audit_passed": False,
+            "reason": "no_mainland_travel_rows",
+            "mapped_mainland_flow_share": 0.0,
+            "mapped_mainland_flow_share_pct": 0.0,
+            "direct_hub_mainland_flow_share": 0.0,
+            "direct_hub_mainland_flow_share_pct": 0.0,
+            "represented_node_count": int(len(node_map)),
+            "represented_municipality_count": int(node_map["municipality_code"].nunique()),
+            "crosswalk_assigned_municipality_count": int(crosswalk["assigned_node"].astype(str).ne("").sum()),
+            "major_missing_hubs": [],
+        }
+        return {
+            "summary": summary,
+            "node_mapping": node_map,
+            "municipality_crosswalk": crosswalk,
+            "prior_pairs": pd.DataFrame(),
+            "missing_municipalities": pd.DataFrame(),
+        }
+
+    travel["origin_node"] = travel["residence_area"].map(assigned_node_by_code).fillna("")
+    travel["destination_node"] = travel["overnight_stay_area"].map(assigned_node_by_code).fillna("")
+    travel["origin_exact_hub"] = travel["residence_area"].map(exact_flag_by_code).fillna(False)
+    travel["destination_exact_hub"] = travel["overnight_stay_area"].map(exact_flag_by_code).fillna(False)
+    travel["origin_supported"] = travel["origin_node"].astype(str).ne("")
+    travel["destination_supported"] = travel["destination_node"].astype(str).ne("")
+    travel["pair_supported"] = travel["origin_supported"] & travel["destination_supported"]
+    travel["pair_direct_hub_supported"] = travel["origin_exact_hub"] & travel["destination_exact_hub"]
+    mapped_flow = float(travel.loc[travel["pair_supported"], "people"].sum())
+    direct_hub_flow = float(travel.loc[travel["pair_direct_hub_supported"], "people"].sum())
+    total_flow = float(travel["people"].sum())
+    mapped_share = mapped_flow / total_flow if total_flow > 0 else 0.0
+    direct_hub_share = direct_hub_flow / total_flow if total_flow > 0 else 0.0
+
+    residence_activity = travel.groupby("residence_area", dropna=False)["people"].sum().rename("residence_people")
+    overnight_activity = travel.groupby("overnight_stay_area", dropna=False)["people"].sum().rename("overnight_people")
+    activity = pd.concat([residence_activity, overnight_activity], axis=1).fillna(0.0).reset_index()
+    activity = activity.rename(columns={"index": "municipality_code"})
+    activity["total_activity_people"] = activity["residence_people"] + activity["overnight_people"]
+    activity = activity.merge(
+        municipality_df[["municipality_code", "nombre", "provincia", "pob_2025"]],
+        on="municipality_code",
+        how="left",
+    )
+    activity["municipality_code"] = activity["municipality_code"].astype(str).str.zfill(5)
+    activity = activity.merge(
+        crosswalk[[
+            "municipality_code",
+            "assigned_node",
+            "assigned_node_name",
+            "assignment_rule",
+            "assignment_distance_km",
+            "is_exact_hub_municipality",
+        ]],
+        on="municipality_code",
+        how="left",
+    )
+    activity["represented_by_node"] = activity["assigned_node"].fillna("").astype(str).ne("")
+    activity["is_exact_hub_municipality"] = activity["is_exact_hub_municipality"].fillna(False).astype(bool)
+    missing_municipalities = activity[~activity["is_exact_hub_municipality"]].copy()
+    missing_municipalities = missing_municipalities.sort_values(
+        ["total_activity_people", "pob_2025"],
+        ascending=[False, False],
+    )
+    major_missing = missing_municipalities.head(int(major_missing_top_n))
+
+    supported_pairs = travel[travel["pair_supported"]].copy()
+    supported_pairs = supported_pairs[supported_pairs["origin_node"] != supported_pairs["destination_node"]]
+    if supported_pairs.empty:
+        prior_pairs = pd.DataFrame(columns=["origin_node", "destination_node", "raw_people", "prior_weight"])
+    else:
+        supported_pairs["pair_a"] = np.where(
+            supported_pairs["origin_node"] <= supported_pairs["destination_node"],
+            supported_pairs["origin_node"],
+            supported_pairs["destination_node"],
+        )
+        supported_pairs["pair_b"] = np.where(
+            supported_pairs["origin_node"] <= supported_pairs["destination_node"],
+            supported_pairs["destination_node"],
+            supported_pairs["origin_node"],
+        )
+        prior_pairs = supported_pairs.groupby(["pair_a", "pair_b"], dropna=False)["people"].sum().reset_index()
+        prior_pairs = prior_pairs.rename(columns={
+            "pair_a": "origin_node",
+            "pair_b": "destination_node",
+            "people": "raw_people",
+        })
+        total_prior_flow = float(prior_pairs["raw_people"].sum()) or 1.0
+        prior_pairs["prior_weight"] = prior_pairs["raw_people"] / total_prior_flow
+        prior_pairs = prior_pairs.sort_values("raw_people", ascending=False)
+
+    summary = {
+        "audit_passed": bool(mapped_share >= float(mapped_flow_share_threshold)),
+        "reason": "" if mapped_share >= float(mapped_flow_share_threshold) else "mapped_flow_share_below_threshold",
+        "mapped_mainland_flow_share": float(mapped_share),
+        "mapped_mainland_flow_share_pct": float(mapped_share * 100.0),
+        "direct_hub_mainland_flow_share": float(direct_hub_share),
+        "direct_hub_mainland_flow_share_pct": float(direct_hub_share * 100.0),
+        "mainland_flow_total_people": total_flow,
+        "mainland_flow_mapped_people": mapped_flow,
+        "represented_node_count": int(len(node_map)),
+        "represented_municipality_count": int(node_map["municipality_code"].nunique()),
+        "crosswalk_assigned_municipality_count": int(crosswalk["assigned_node"].astype(str).ne("").sum()),
+        "crosswalk_total_municipality_count": int(len(crosswalk)),
+        "crosswalk_reference_sources": {
+            str(source): int(count)
+            for source, count in crosswalk["reference_source"].fillna("").value_counts().sort_index().items()
+        },
+        "crosswalk_road_aligned_count": int(crosswalk["reference_source"].eq("road_aligned_official_coordinate").sum()),
+        "crosswalk_road_aligned_share_pct": float(
+            100.0 * crosswalk["reference_source"].eq("road_aligned_official_coordinate").mean()
+            if len(crosswalk) > 0 else 0.0
+        ),
+        "prior_pair_count": int(len(prior_pairs)),
+        "crosswalk_assignment_rules": {
+            str(rule): int(count)
+            for rule, count in crosswalk["assignment_rule"].fillna("").value_counts().sort_index().items()
+        },
+        "major_missing_hubs": [
+            {
+                "municipality_code": _json_safe(row["municipality_code"]),
+                "municipality_name": _json_safe(row["nombre"]),
+                "province": _json_safe(row["provincia"]),
+                "population": _json_safe(row["pob_2025"]),
+                "total_activity_people": _json_safe(row["total_activity_people"]),
+                "assigned_node": _json_safe(row.get("assigned_node")),
+            }
+            for _, row in major_missing.iterrows()
+        ],
+    }
+    return {
+        "summary": summary,
+        "node_mapping": node_map,
+        "municipality_crosswalk": crosswalk,
+        "prior_pairs": prior_pairs,
+        "missing_municipalities": missing_municipalities,
+    }
+
+
+def _load_hybrid_hub_prior(
+    data_dir: Path,
+    debug_dir: Path | None = None,
+) -> dict:
+    raw_dir = Path(data_dir).parent
+    prior_path = raw_dir / _OD_PRIOR_RAW_RELATIVE_PATH
+    municipality_path = raw_dir / _MUNICIPALITY_REFERENCE_RELATIVE_PATH
+    official_municipality_path = raw_dir / _CNIG_NGMEP_ZIP_RELATIVE_PATH
+    node_df = _city_node_municipality_frame()
+
+    if not prior_path.exists() or (not municipality_path.exists() and not official_municipality_path.exists()):
+        summary = {
+            "audit_passed": False,
+            "reason": "missing_raw_inputs",
+            "prior_path": str(prior_path),
+            "municipality_reference_path": str(municipality_path),
+            "official_municipality_reference_path": str(official_municipality_path),
+            "represented_node_count": int(len(node_df)),
+        }
+        logger.warning(
+            "Hybrid OD prior disabled: missing raw inputs (%s, %s / %s)",
+            prior_path, municipality_path, official_municipality_path,
+        )
+        result = {
+            "summary": summary,
+            "node_mapping": node_df,
+            "municipality_crosswalk": pd.DataFrame(),
+            "prior_pairs": pd.DataFrame(),
+            "missing_municipalities": pd.DataFrame(),
+            "prior_weight_by_pair": {},
+        }
+        if debug_dir is not None:
+            debug_dir = Path(debug_dir)
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            result["node_mapping"].to_csv(debug_dir / "abm_od_hub_node_mapping.csv", index=False)
+            (debug_dir / "abm_od_hub_audit_summary.json").write_text(
+                json.dumps(result["summary"], indent=2),
+                encoding="utf-8",
+            )
+        return result
+
+    province_centroid_df = _load_province_centroid_frame(data_dir)
+    roads_gdf = _load_roads_geometry(data_dir)
+    if official_municipality_path.exists():
+        municipality_df = _load_official_municipality_reference(
+            raw_dir=raw_dir,
+            municipality_reference_path=municipality_path if municipality_path.exists() else None,
+        )
+        prior_mode = "official_ngmep_road_aligned_hub_crosswalk"
+    else:
+        municipality_df = pd.read_csv(municipality_path)
+        municipality_df["municipality_code"] = municipality_df["municipality_code"].astype(str).str.zfill(5)
+        municipality_df["province_code"] = municipality_df["municipality_code"].astype(str).str[:2]
+        prior_mode = "province_centroid_hub_crosswalk"
+    crosswalk_df = _build_municipality_hub_crosswalk(
+        node_df=node_df,
+        municipality_df=municipality_df,
+        province_centroid_df=province_centroid_df,
+        roads_gdf=roads_gdf,
+    )
+    travel_df = pd.read_parquet(
+        prior_path,
+        columns=["residence_area", "overnight_stay_area", "people"],
+    )
+    result = _evaluate_hybrid_hub_prior(
+        node_df=node_df,
+        municipality_df=municipality_df,
+        travel_df=travel_df,
+        crosswalk_df=crosswalk_df,
+    )
+    result["summary"].update({
+        "raw_prior_path": str(prior_path),
+        "municipality_reference_path": str(municipality_path),
+        "official_municipality_reference_path": str(official_municipality_path),
+        "prior_mode": prior_mode,
+        "hybrid_prior_enabled": bool(result["summary"].get("audit_passed", False)),
+    })
+    result["prior_weight_by_pair"] = {
+        (str(row.origin_node), str(row.destination_node)): float(row.prior_weight)
+        for row in result["prior_pairs"].itertuples(index=False)
+    }
+
+    if debug_dir is not None:
+        debug_dir = Path(debug_dir)
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        result["node_mapping"].to_csv(debug_dir / "abm_od_hub_node_mapping.csv", index=False)
+        result["municipality_crosswalk"].to_csv(debug_dir / "abm_od_hub_municipality_crosswalk.csv", index=False)
+        result["missing_municipalities"].to_csv(debug_dir / "abm_od_hub_missing_municipalities.csv", index=False)
+        result["prior_pairs"].to_csv(debug_dir / "abm_od_hub_prior_pairs.csv", index=False)
+        (debug_dir / "abm_od_hub_audit_summary.json").write_text(
+            json.dumps(result["summary"], indent=2),
+            encoding="utf-8",
+        )
+
+    return result
+
+
+def _pair_prior_weight(
+    prior_weight_by_pair: Dict[Tuple[str, str], float],
+    a: str,
+    b: str,
+) -> float | None:
+    key = (a, b) if a <= b else (b, a)
+    return prior_weight_by_pair.get(key)
 
 
 def _load_roads_geometry(data_dir: Path):
@@ -1201,6 +1924,8 @@ def _build_od_matrix(
     demand_df: pd.DataFrame,
     network: RoadNetwork,
     corridors: Dict[str, List[str]],
+    data_dir: Path,
+    debug_dir: Path | None = None,
 ) -> ODMatrix:
     """
     Build an ODMatrix calibrated to 2027 BEV demand from
@@ -1245,6 +1970,21 @@ def _build_od_matrix(
         .apply(_lw_mean)
         .to_dict()
     )
+    hybrid_prior = _load_hybrid_hub_prior(data_dir, debug_dir=debug_dir)
+    prior_weight_by_pair: Dict[Tuple[str, str], float] = hybrid_prior["prior_weight_by_pair"]
+    hybrid_enabled = bool(hybrid_prior["summary"].get("audit_passed", False))
+    if hybrid_enabled:
+        logger.info(
+            "Hybrid OD prior enabled: %.1f%% of mainland ministry flow maps to current hub crosswalk (%.1f%% via exact hub municipalities, %d prior pairs)",
+            float(hybrid_prior["summary"].get("mapped_mainland_flow_share_pct", 0.0)),
+            float(hybrid_prior["summary"].get("direct_hub_mainland_flow_share_pct", 0.0)),
+            int(hybrid_prior["summary"].get("prior_pair_count", 0)),
+        )
+    else:
+        logger.warning(
+            "Hybrid OD prior disabled; using synthetic OD weighting only (%s)",
+            hybrid_prior["summary"].get("reason", "mapped_flow_share_below_threshold"),
+        )
 
     # All corridors (hand-curated + auto-detected) contribute to OD emission.
     # Auto-detected corridors receive a 0.5× demand dampening so any charger-
@@ -1257,6 +1997,11 @@ def _build_od_matrix(
     matched_flow = 0.0
     matched_roads = 0
     auto_matched_roads = 0
+    corridor_pairs_considered = 0
+    corridor_pairs_considered_using_prior = 0
+    corridor_pairs_emitted = 0
+    corridor_pairs_emitted_using_prior = 0
+    corridor_flow_using_prior = 0.0
 
     for road_name, total_flow in road_demand.items():
         is_auto = road_name not in static_names
@@ -1290,17 +2035,33 @@ def _build_od_matrix(
                 cumulative += seg_lens[j - 1]
                 pair_lens[(i, j)] = cumulative
 
-        # Gravity weights: flow ∝ 1 / pair_length. Normalise so the sum of all
-        # one-way pair flows on this corridor equals ``total_flow`` (preserves
-        # the IMD-calibrated corridor-level trip volume from iter_02 logic).
-        weights = {k: 1.0 / max(lg, 1.0) for k, lg in pair_lens.items()}
+        # Use ministry-derived pair weights when available; otherwise fall back
+        # to the existing inverse-distance heuristic.
+        weights: Dict[Tuple[int, int], float] = {}
+        pair_uses_prior: Dict[Tuple[int, int], bool] = {}
+        for key, pair_length in pair_lens.items():
+            i, j = key
+            prior_weight = _pair_prior_weight(prior_weight_by_pair, valid[i], valid[j]) if hybrid_enabled else None
+            if prior_weight is not None:
+                weights[key] = float(prior_weight)
+                pair_uses_prior[key] = True
+            else:
+                weights[key] = 1.0 / max(pair_length, 1.0)
+                pair_uses_prior[key] = False
         total_weight = sum(weights.values()) or 1.0
 
         for (i, j), w in weights.items():
+            corridor_pairs_considered += 1
+            if pair_uses_prior.get((i, j), False):
+                corridor_pairs_considered_using_prior += 1
             pair_flow = float(total_flow * w / total_weight)
             if pair_flow < 0.5:
                 continue
             o, d = valid[i], valid[j]
+            corridor_pairs_emitted += 1
+            if pair_uses_prior.get((i, j), False):
+                corridor_pairs_emitted_using_prior += 1
+                corridor_flow_using_prior += 2 * pair_flow
             od.add_pair(ODPair(
                 origin=o, destination=d,
                 daily_bev_trips=pair_flow, purpose=purpose,
@@ -1325,8 +2086,9 @@ def _build_od_matrix(
     # ------------------------------------------------------------------
     # Fill in city-pairs that don't share a hand-curated corridor (e.g.
     # BCN↔SEV, SEV↔MAL, MAD↔VIG) but are geographically within BEV range.
-    # Flow is weighted by population gravity:  f ∝ pop_i * pop_j / d^2 ,
-    # capped at 700 km graph distance, and normalised so the total cross-
+    # Flow is weighted by ministry-derived pair priors when available,
+    # otherwise by population gravity:  f ∝ pop_i * pop_j / d^2.
+    # Capped at 700 km graph distance, and normalised so the total cross-
     # corridor flow equals CROSS_FRACTION of the corridor-based flow.
     CROSS_FRACTION = 0.15
     city_info: Dict[str, Tuple[float, float, int]] = {
@@ -1334,8 +2096,9 @@ def _build_od_matrix(
     }
     existing_pairs = {(p.origin, p.destination) for p in od.pairs}
 
-    raw_cross: List[Tuple[str, str, float, float]] = []
+    raw_cross: List[Tuple[str, str, float, bool]] = []
     ids = [c for c in city_info if c in network.nodes]
+    cross_pairs_considered_using_prior = 0
     for i in range(len(ids)):
         for j in range(i + 1, len(ids)):
             ci, cj = ids[i], ids[j]
@@ -1349,17 +2112,26 @@ def _build_od_matrix(
                 continue
             if gdist <= 0.0 or gdist > 700.0:
                 continue
-            pop_i = city_info[ci][2]
-            pop_j = city_info[cj][2]
-            weight = (pop_i * pop_j) / (gdist * gdist)
-            raw_cross.append((ci, cj, gdist, weight))
+            prior_weight = _pair_prior_weight(prior_weight_by_pair, ci, cj) if hybrid_enabled else None
+            if prior_weight is not None:
+                weight = float(prior_weight)
+                uses_prior = True
+                cross_pairs_considered_using_prior += 1
+            else:
+                pop_i = city_info[ci][2]
+                pop_j = city_info[cj][2]
+                weight = (pop_i * pop_j) / (gdist * gdist)
+                uses_prior = False
+            raw_cross.append((ci, cj, weight, uses_prior))
 
     target_cross_flow = matched_flow * CROSS_FRACTION
-    total_cross_weight = sum(w for _, _, _, w in raw_cross) or 1.0
+    total_cross_weight = sum(w for _, _, w, _uses_prior in raw_cross) or 1.0
     cross_scale = target_cross_flow / total_cross_weight
     cross_added = 0
     cross_flow_total = 0.0
-    for ci, cj, _gd, w in raw_cross:
+    cross_pairs_emitted_using_prior = 0
+    cross_flow_using_prior = 0.0
+    for ci, cj, w, uses_prior in raw_cross:
         pair_flow = cross_scale * w
         if pair_flow < 0.5:
             continue
@@ -1373,12 +2145,15 @@ def _build_od_matrix(
         ))
         cross_added += 1
         cross_flow_total += 2 * pair_flow
+        if uses_prior:
+            cross_pairs_emitted_using_prior += 1
+            cross_flow_using_prior += 2 * pair_flow
 
     logger.info(
-        "Cross-corridor OD: %d gravity pairs added "
-        "(%.0f daily BEV trips ≈ %.0f%% of corridor flow, %d candidates considered)",
+        "Cross-corridor OD: %d pairs added "
+        "(%.0f daily BEV trips ≈ %.0f%% of corridor flow, %d candidates considered, %d prior candidates, %d prior pairs emitted)",
         cross_added, cross_flow_total,
-        CROSS_FRACTION * 100.0, len(raw_cross),
+        CROSS_FRACTION * 100.0, len(raw_cross), cross_pairs_considered_using_prior, cross_pairs_emitted_using_prior,
     )
 
     total_csv_flow = matched_flow + unmatched_flow
@@ -1431,6 +2206,32 @@ def _build_od_matrix(
     od.set_observed_counts({
         road: float(flow) for road, flow in road_demand.items()
     })
+    od.hybrid_prior_summary = {
+        **hybrid_prior["summary"],
+        "corridor_pairs_considered": int(corridor_pairs_considered),
+        "corridor_pairs_considered_using_ministry_prior": int(corridor_pairs_considered_using_prior),
+        "corridor_pairs_emitted": int(corridor_pairs_emitted),
+        "corridor_pairs_emitted_using_ministry_prior": int(corridor_pairs_emitted_using_prior),
+        "cross_pairs_considered": int(len(raw_cross)),
+        "cross_pairs_considered_using_ministry_prior": int(cross_pairs_considered_using_prior),
+        "cross_pairs_emitted": int(cross_added),
+        "cross_pairs_emitted_using_ministry_prior": int(cross_pairs_emitted_using_prior),
+        "corridor_flow_using_ministry_prior": float(corridor_flow_using_prior),
+        "cross_flow_using_ministry_prior": float(cross_flow_using_prior),
+        "od_total_daily_bev_trips": float(od.total_daily_trips()),
+        "od_volume_using_ministry_prior_share": (
+            float(corridor_flow_using_prior + cross_flow_using_prior) / float(od.total_daily_trips())
+            if od.total_daily_trips() > 0
+            else 0.0
+        ),
+    }
+    if debug_dir is not None:
+        debug_dir = Path(debug_dir)
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        (debug_dir / "abm_od_hybrid_prior_summary.json").write_text(
+            json.dumps(od.hybrid_prior_summary, indent=2),
+            encoding="utf-8",
+        )
 
     return od
 

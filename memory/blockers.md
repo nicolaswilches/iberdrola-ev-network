@@ -2,7 +2,16 @@
 
 ## Active Blockers
 
-_(none)_
+### [ACTIVE 2026-04-24] Municipality calibration coverage is still too small for meaningful nationwide fit
+
+**Issue:** The stitched municipality graph is now routable and the top-1000 OD slice has full candidate reachability, but the current calibration sample only covers `14.9k` of `97.7k` daily BEV OD trips (`~15.2%`). Segment fit is therefore being judged against the full national segment surface with too little OD demand mass and too little routing diversity.
+
+**Current evidence:**
+- `728 / 1295` target segments covered (`70.5%` of target flow)
+- `68.2%` of ODs have exactly one candidate path
+- most covered target flow is still labeled `candidate_scarcity` or `major_city_scarcity`
+
+**What needs to happen next:** increase municipality OD scope and candidate diversity before treating the current WMAPE values as a verdict on the optimization formulation.
 
 ## Recently Resolved
 

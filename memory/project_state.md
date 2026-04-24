@@ -1,7 +1,7 @@
 # Project State
 
-**Last updated:** 2026-04-22
-**Status:** Full pipeline executed (NB01–NB10) with corrected gap logic, aligned demand sizing, safe grid consolidation, regenerated submission files, and exported visualization. BI map upgraded to grid-status-first palette with congestion heatmap, TEN-T tier styling, station↔substation links, friction badges and KPI dashboard for report/pitch use. ABM animation regenerated with continuity-checked routing + path densification (0 off-corridor trip jumps; see `decisions_log.md` 2026-04-22). v2 MIP model built alongside locked greedy (`notebooks/07c_network_optimization_mip.ipynb`, `src/candidate_generation.py`, `src/run_mip_v2.py`, `place_stations_mip()` in `src/optimization.py`): 225 stations / 785 chargers / 117.8 MW / 0 AFIR gaps / 427 unmet / DSO i-DE 47% ∙ Endesa 43% ∙ Viesgo 10%. Penalty sweep traces 55 → 307 stations across €50k–€400k/unit. Locked v1 submission unchanged. Report and pitch deck remain pending.
+**Last updated:** 2026-04-24
+**Status:** Main notebook pipeline remains complete and unchanged. New ABM municipality-demand refactor is now in progress in `src/new-abm/`: official municipality OD input is converted explicitly from people → private-car travelers → vehicle trips → 2027 BEV trips; the municipality-road graph is stitched from processed/Hermes geometry; municipality nodes are attached directly or via anchors; segment/road OD coverage diagnostics and competition diagnostics are exported; and top-1000 municipality OD pairs on the stitched graph now have 100% candidate-path reachability. Calibration quality is still poor because the current sample only covers ~15% of municipality OD demand and candidate diversity is still shallow, so the next work is demand scaling and richer candidate generation rather than more solver tuning.
 
 ## What is done
 
@@ -49,3 +49,31 @@
 
 - `report/analytical_report.pdf`
 - `presentation/pitch.pdf`
+
+## New-ABM municipality calibration status
+
+- Municipality demand nodes restricted to the `2,435` mainland municipalities that actually appear in the raw OD parquet.
+- Raw municipality people flows are now converted with explicit national factors:
+  - `car_mode_share = 0.849`
+  - `occupancy = 1.74`
+  - `EV_PENETRATION_RATE = EV_FLEET_2027 / TOTAL_VEHICLE_FLEET`
+  - `BEV_FRACTION = 0.60`
+- Full processed road network is stitched into a routable graph with:
+  - road junction nodes
+  - inter-road exchange nodes at geometric intersections
+  - same-road gap bridges for adjacent processed segments
+  - municipality anchors for non-endpoint municipalities
+- Current stitched municipality graph diagnostics:
+  - `2435` municipality nodes
+  - `1295` processed road segments
+  - `1379` road junction nodes
+  - `1261` road exchange nodes
+  - `1867` road anchor nodes
+  - `5` weakly connected components
+  - `0` unreachable municipality nodes
+- Candidate generation on the stitched graph now gives `1000 / 1000` candidate-covered ODs for the current top-1000 demand slice.
+- Current calibration diagnosis:
+  - `728 / 1295` target segments covered
+  - `70.5%` covered target share
+  - most covered target flow is still labeled `candidate_scarcity` or `major_city_scarcity`
+  - OD conservation sweep shows expected tradeoff, but errors remain high because the run only calibrates `1000` ODs (`~15.2%` of total municipality BEV OD demand) and `68.2%` of ODs still have only one candidate path

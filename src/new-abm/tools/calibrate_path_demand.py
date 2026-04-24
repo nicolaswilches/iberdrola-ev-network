@@ -72,6 +72,7 @@ def main() -> int:
         data_dir=data_dir,
         rng=np.random.default_rng(args.seed),
         include_proposed_stations=True,
+        od_debug_dir=out_dir,
     )
     demand = pd.read_csv(data_dir / "demand_per_segment.csv")
     result = calibrate_path_demand(
