@@ -31,10 +31,12 @@ except ModuleNotFoundError:
 from data_generation.graph_vocab import (
     EdgeKind,
     NodeKind,
+    make_edge,
+    make_node,
     validate_network,
 )
 from models.demand import ODMatrix, ODPair
-from models.network import RoadEdge, RoadNetwork, RoadNode
+from models.network import RoadNetwork
 from data_generation.spanish_network import (
     _MUNICIPALITY_REFERENCE_RELATIVE_PATH,
     _NON_MAINLAND_PROVINCES,
@@ -934,47 +936,43 @@ def build_municipality_calibration_network(
 
     network = RoadNetwork()
     for row in junction_nodes.itertuples(index=False):
-        network.add_node(
-            RoadNode(
-                node_id=str(row.node_id),
-                name=str(row.node_id),
-                latitude=float(row.latitude),
-                longitude=float(row.longitude),
-                node_type=str(row.node_type),
-                population=0,
-            )
-        )
+        network.add_node(make_node(
+            NodeKind(str(row.node_type)),
+            node_id=str(row.node_id),
+            name=str(row.node_id),
+            latitude=float(row.latitude),
+            longitude=float(row.longitude),
+        ))
     for row in municipalities.itertuples(index=False):
         population = 0 if pd.isna(row.pob_2025) else int(float(row.pob_2025))
-        network.add_node(
-            RoadNode(
-                node_id=str(row.node_id),
-                name=str(row.nombre),
-                latitude=float(row.latitude),
-                longitude=float(row.longitude),
-                node_type=NodeKind.MUNICIPALITY.value,
-                population=population,
-            )
-        )
+        network.add_node(make_node(
+            NodeKind.MUNICIPALITY,
+            node_id=str(row.node_id),
+            name=str(row.nombre),
+            latitude=float(row.latitude),
+            longitude=float(row.longitude),
+            population=population,
+        ))
 
     for row in road_edges.itertuples(index=False):
         speed = float(_SPEED_KMH.get(str(row.road_type), 90.0))
-        network.add_undirected_road(
-            RoadEdge(
-                edge_id=str(row.edge_id),
-                from_node=str(row.from_node_id),
-                to_node=str(row.to_node_id),
-                distance_km=float(row.distance_km),
-                travel_time_min=max(float(row.distance_km) / speed * 60.0, _MUNICIPALITY_ENDPOINT_CONNECTOR_MIN),
-                road_type=str(row.road_type),
-                road_name=str(row.road_name),
-                from_road_km=float(row.from_road_km),
-                to_road_km=float(row.to_road_km),
-                source_segment_ids=tuple(row.source_segment_ids) if isinstance(row.source_segment_ids, tuple) else tuple(),
-                target_daily_bev_traffic_2027=float(row.target_daily_bev_traffic_2027),
-                geometry_backed=True,
-            )
-        )
+        edge_id = str(row.edge_id)
+        edge_kind = EdgeKind.GAP_BRIDGE if edge_id.startswith("GAPBRIDGE_") else EdgeKind.ROAD_SEGMENT
+        from_n = network.nodes[str(row.from_node_id)]
+        to_n = network.nodes[str(row.to_node_id)]
+        network.add_undirected_road(make_edge(
+            edge_kind, from_n, to_n,
+            edge_id=edge_id,
+            distance_km=float(row.distance_km),
+            travel_time_min=max(float(row.distance_km) / speed * 60.0, _MUNICIPALITY_ENDPOINT_CONNECTOR_MIN),
+            road_type=str(row.road_type),
+            road_name=str(row.road_name),
+            from_road_km=float(row.from_road_km),
+            to_road_km=float(row.to_road_km),
+            source_segment_ids=tuple(row.source_segment_ids) if isinstance(row.source_segment_ids, tuple) else tuple(),
+            target_daily_bev_traffic_2027=float(row.target_daily_bev_traffic_2027),
+            geometry_backed=True,
+        ))
 
     municipality_attachment_counts: Dict[str, int] = {}
     endpoint_connector_keys: set[tuple[str, str]] = set()
@@ -994,18 +992,16 @@ def build_municipality_calibration_network(
             if edge_key in endpoint_connector_keys:
                 continue
             endpoint_connector_keys.add(edge_key)
-            network.add_undirected_road(
-                RoadEdge(
-                    edge_id=f"MUNIEND_{municipality_code}_{segment_id}_{endpoint_node}",
-                    from_node=municipality_node,
-                    to_node=endpoint_node,
-                    distance_km=_MUNICIPALITY_ENDPOINT_CONNECTOR_KM,
-                    travel_time_min=_MUNICIPALITY_ENDPOINT_CONNECTOR_MIN,
-                    road_type="connector",
-                    road_name=f"CONNECTOR_{municipality_code}",
-                    geometry_backed=True,
-                )
-            )
+            network.add_undirected_road(make_edge(
+                EdgeKind.MUNICIPALITY_CONNECTOR,
+                network.nodes[municipality_node],
+                network.nodes[endpoint_node],
+                edge_id=f"MUNIEND_{municipality_code}_{segment_id}_{endpoint_node}",
+                distance_km=_MUNICIPALITY_ENDPOINT_CONNECTOR_KM,
+                travel_time_min=_MUNICIPALITY_ENDPOINT_CONNECTOR_MIN,
+                road_name=f"CONNECTOR_{municipality_code}",
+                geometry_backed=True,
+            ))
 
     municipalities["endpoint_attachment_count"] = municipalities["municipality_code"].map(municipality_attachment_counts).fillna(0).astype(int)
     municipalities["has_endpoint_attachment"] = municipalities["endpoint_attachment_count"] > 0
@@ -1035,28 +1031,23 @@ def build_municipality_calibration_network(
             anchored_codes.add(municipality_code)
             anchor_node = _road_anchor_node_id(municipality_code)
             if anchor_node not in network.nodes:
-                network.add_node(
-                    RoadNode(
-                        node_id=anchor_node,
-                        name=anchor_node,
-                        latitude=float(row.road_anchor_latitude),
-                        longitude=float(row.road_anchor_longitude),
-                        node_type=NodeKind.ROAD_ANCHOR.value,
-                        population=0,
-                    )
-                )
-            network.add_undirected_road(
-                RoadEdge(
-                    edge_id=f"ANCHORCONNECT_{municipality_code}",
-                    from_node=str(row.node_id),
-                    to_node=anchor_node,
-                    distance_km=max(float(row.nearest_road_distance_km or 0.0), _MUNICIPALITY_ENDPOINT_CONNECTOR_KM),
-                    travel_time_min=max(float(row.nearest_road_distance_km or 0.0) / 40.0 * 60.0, _MUNICIPALITY_ENDPOINT_CONNECTOR_MIN),
-                    road_type="connector",
-                    road_name=f"CONNECTOR_{municipality_code}",
-                    geometry_backed=True,
-                )
-            )
+                network.add_node(make_node(
+                    NodeKind.ROAD_ANCHOR,
+                    node_id=anchor_node,
+                    name=anchor_node,
+                    latitude=float(row.road_anchor_latitude),
+                    longitude=float(row.road_anchor_longitude),
+                ))
+            network.add_undirected_road(make_edge(
+                EdgeKind.ANCHOR_LINK,
+                network.nodes[str(row.node_id)],
+                network.nodes[anchor_node],
+                edge_id=f"ANCHORCONNECT_{municipality_code}",
+                distance_km=max(float(row.nearest_road_distance_km or 0.0), _MUNICIPALITY_ENDPOINT_CONNECTOR_KM),
+                travel_time_min=max(float(row.nearest_road_distance_km or 0.0) / 40.0 * 60.0, _MUNICIPALITY_ENDPOINT_CONNECTOR_MIN),
+                road_name=f"CONNECTOR_{municipality_code}",
+                geometry_backed=True,
+            ))
 
             segment_id = int(float(row.nearest_road_segment_id))
             segment_chain = cut_rows_by_segment.get(segment_id)
@@ -1078,20 +1069,19 @@ def build_municipality_calibration_network(
             for linked_node, split_distance_km in linked_nodes.items():
                 if linked_node == anchor_node:
                     continue
-                network.add_undirected_road(
-                    RoadEdge(
-                        edge_id=f"ANCHORLINK_{municipality_code}_{segment_id}_{linked_node}",
-                        from_node=anchor_node,
-                        to_node=linked_node,
-                        distance_km=split_distance_km,
-                        travel_time_min=max(split_distance_km / speed * 60.0, _MUNICIPALITY_ENDPOINT_CONNECTOR_MIN),
-                        road_type=road_type,
-                        road_name=road_name,
-                        source_segment_ids=(segment_id,),
-                        target_daily_bev_traffic_2027=target_flow,
-                        geometry_backed=True,
-                    )
-                )
+                network.add_undirected_road(make_edge(
+                    EdgeKind.ANCHOR_LINK,
+                    network.nodes[anchor_node],
+                    network.nodes[linked_node],
+                    edge_id=f"ANCHORLINK_{municipality_code}_{segment_id}_{linked_node}",
+                    distance_km=split_distance_km,
+                    travel_time_min=max(split_distance_km / speed * 60.0, _MUNICIPALITY_ENDPOINT_CONNECTOR_MIN),
+                    road_type=road_type,
+                    road_name=road_name,
+                    source_segment_ids=(segment_id,),
+                    target_daily_bev_traffic_2027=target_flow,
+                    geometry_backed=True,
+                ))
         municipalities["has_network_anchor"] = municipalities["municipality_code"].astype(str).isin(anchored_codes)
     else:
         municipalities["has_network_anchor"] = False
@@ -1202,16 +1192,14 @@ def build_municipality_road_graph(
     network = RoadNetwork()
     for row in municipalities.itertuples(index=False):
         population = 0 if pd.isna(row.pob_2025) else int(float(row.pob_2025))
-        network.add_node(
-            RoadNode(
-                node_id=str(row.node_id),
-                name=str(row.nombre),
-                latitude=float(row.latitude),
-                longitude=float(row.longitude),
-                node_type=NodeKind.MUNICIPALITY.value,
-                population=population,
-            )
-        )
+        network.add_node(make_node(
+            NodeKind.MUNICIPALITY,
+            node_id=str(row.node_id),
+            name=str(row.nombre),
+            latitude=float(row.latitude),
+            longitude=float(row.longitude),
+            population=population,
+        ))
 
     geo_nodes: Dict[str, Tuple[float, float]] = {}
     municipality_attachment_counts: Dict[str, int] = {}
@@ -1236,21 +1224,19 @@ def build_municipality_road_graph(
         for node_id in (start_node, end_node):
             if node_id in geo_nodes and node_id not in network.nodes:
                 lat, lon = geo_nodes[node_id]
-                network.add_node(
-                    RoadNode(
-                        node_id=node_id,
-                        name=node_id,
-                        latitude=float(lat),
-                        longitude=float(lon),
-                        node_type=NodeKind.GEO_ENDPOINT.value,
-                        population=0,
-                    )
-                )
+                network.add_node(make_node(
+                    NodeKind.GEO_ENDPOINT,
+                    node_id=node_id,
+                    name=node_id,
+                    latitude=float(lat),
+                    longitude=float(lon),
+                ))
 
-        edge = RoadEdge(
+        edge = make_edge(
+            EdgeKind.ROAD_SEGMENT,
+            network.nodes[start_node],
+            network.nodes[end_node],
             edge_id=f"RAWROAD_{int(row.raw_segment_id)}",
-            from_node=start_node,
-            to_node=end_node,
             distance_km=float(row.length_km or 0.0),
             travel_time_min=max(float(row.length_km or 0.0) / 100.0 * 60.0, 0.1),
             road_type=str(row.road_type),
@@ -1334,24 +1320,21 @@ def build_municipality_road_graph(
             anchored_codes.add(municipality_code)
             anchor_node_id = _road_anchor_node_id(municipality_code)
             if anchor_node_id not in network.nodes:
-                network.add_node(
-                    RoadNode(
-                        node_id=anchor_node_id,
-                        name=anchor_node_id,
-                        latitude=float(row.road_anchor_latitude),
-                        longitude=float(row.road_anchor_longitude),
-                        node_type=NodeKind.ROAD_ANCHOR.value,
-                        population=0,
-                    )
-                )
+                network.add_node(make_node(
+                    NodeKind.ROAD_ANCHOR,
+                    node_id=anchor_node_id,
+                    name=anchor_node_id,
+                    latitude=float(row.road_anchor_latitude),
+                    longitude=float(row.road_anchor_longitude),
+                ))
 
-            connector_edge = RoadEdge(
+            connector_edge = make_edge(
+                EdgeKind.ANCHOR_LINK,
+                network.nodes[str(row.node_id)],
+                network.nodes[anchor_node_id],
                 edge_id=f"CONNECTOR_{municipality_code}",
-                from_node=str(row.node_id),
-                to_node=anchor_node_id,
                 distance_km=max(float(row.nearest_road_distance_km or 0.0), 0.001),
                 travel_time_min=max(float(row.nearest_road_distance_km or 0.0) / 40.0 * 60.0, 0.1),
-                road_type="connector",
                 road_name=f"CONNECTOR_{municipality_code}",
                 geometry_backed=False,
             )
@@ -1370,31 +1353,29 @@ def build_municipality_road_graph(
             road_type = str(segment_type_by_id[raw_segment_id])
 
             if anchor_node_id != start_node_id:
-                network.add_undirected_road(
-                    RoadEdge(
-                        edge_id=f"ANCHORLINK_{municipality_code}_{raw_segment_id}_START",
-                        from_node=anchor_node_id,
-                        to_node=start_node_id,
-                        distance_km=distance_from_start_km,
-                        travel_time_min=max(distance_from_start_km / 100.0 * 60.0, 0.1),
-                        road_type=road_type,
-                        road_name=road_name,
-                        geometry_backed=True,
-                    )
-                )
+                network.add_undirected_road(make_edge(
+                    EdgeKind.ANCHOR_LINK,
+                    network.nodes[anchor_node_id],
+                    network.nodes[start_node_id],
+                    edge_id=f"ANCHORLINK_{municipality_code}_{raw_segment_id}_START",
+                    distance_km=distance_from_start_km,
+                    travel_time_min=max(distance_from_start_km / 100.0 * 60.0, 0.1),
+                    road_type=road_type,
+                    road_name=road_name,
+                    geometry_backed=True,
+                ))
             if anchor_node_id != end_node_id:
-                network.add_undirected_road(
-                    RoadEdge(
-                        edge_id=f"ANCHORLINK_{municipality_code}_{raw_segment_id}_END",
-                        from_node=anchor_node_id,
-                        to_node=end_node_id,
-                        distance_km=distance_to_end_km,
-                        travel_time_min=max(distance_to_end_km / 100.0 * 60.0, 0.1),
-                        road_type=road_type,
-                        road_name=road_name,
-                        geometry_backed=True,
-                    )
-                )
+                network.add_undirected_road(make_edge(
+                    EdgeKind.ANCHOR_LINK,
+                    network.nodes[anchor_node_id],
+                    network.nodes[end_node_id],
+                    edge_id=f"ANCHORLINK_{municipality_code}_{raw_segment_id}_END",
+                    distance_km=distance_to_end_km,
+                    travel_time_min=max(distance_to_end_km / 100.0 * 60.0, 0.1),
+                    road_type=road_type,
+                    road_name=road_name,
+                    geometry_backed=True,
+                ))
         municipalities["municipality_code"] = municipalities["municipality_code"].astype(str).str.zfill(5)
         municipalities["has_network_anchor"] = municipalities["municipality_code"].isin(anchored_codes)
     else:
