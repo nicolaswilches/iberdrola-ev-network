@@ -22,7 +22,7 @@ from typing import Any, Dict, FrozenSet, Iterable, Optional, Tuple
 
 import pandas as pd
 
-from models.network import RoadEdge, RoadNetwork, RoadNode
+from graph.network import RoadEdge, RoadNetwork, RoadNode
 
 
 class GraphVocabError(ValueError):

@@ -1,5 +1,50 @@
 # Decisions Log
 
+## 2026-04-25 — Issue #8 (Tier C) implemented: src/new-abm/ renamed to src/simulation/
+
+`git mv src/new-abm src/simulation` — single rename, history preserved on every file. External references patched for directory paths only (git branch references to `new-abm` left intact since they're a separate identifier):
+
+- `notebooks/datathon_submission.ipynb`: 97 cell sources + ~90 cell metadata `origin.source` annotations
+- `scripts/build_colab_notebook.py`: 8 directory string references; the 8+ branch references untouched
+- `README.md`: 2 directory references (`src/new-abm/` in directory tree + feedback-loop path)
+- `visualization/abm_animation/export_trajectories.py`: import path
+- 8 `.py` files inside the renamed package: docstrings and runtime path strings
+
+Memory updated: `task_board.md`, `project_structure.md`, `project_state.md`, `abm_scaling_task.md`. `decisions_log.md` historical entries retain `src/new-abm/` text — they describe state at time of writing and shouldn't be retroactively rewritten. `bug_reviews/bug_review_2026-04-17.py` is a historical PDF generator and similarly left alone.
+
+89 tests pass under the new path. NB01–NB10 (the locked submission pipeline producing `File_1/2/3.csv`) do not reference `new-abm` at all, so the rename cannot affect submission outputs — no byte-identity verification needed.
+
+#8 is now fully closed (Tier B + Tier C in two PRs).
+
+---
+
+## 2026-04-25 — Issue #8 (Tier B) implemented: graph package carved out
+
+Created `src/graph/` as the canonical home for the shared graph foundation. Moved two files via `git mv` (so history is preserved):
+
+- `src/new-abm/models/network.py` → `src/graph/network.py` (`RoadNode`, `RoadEdge`, `RoadNetwork` dataclasses)
+- `src/new-abm/data_generation/graph_vocab.py` → `src/graph/vocab.py`
+
+`src/graph/vocab.py`'s internal `from models.network import ...` updated to `from graph.network import ...` (the canonical path). Tests in `tests/test_graph_vocab.py` likewise migrated to import from `graph.vocab` and `graph.network` directly, proving the new layout is self-supporting.
+
+**Backward-compat shims** left at the old paths so the 22 `from models.network import` consumers and 3 `from data_generation.graph_vocab import` consumers keep working unchanged. Each shim is a 10-line file that adds `src/` to `sys.path` (if not already there) and re-exports the public API. Shims are temporary; they get deleted in a follow-up PR after consumers migrate.
+
+89 tests pass.
+
+**Scoping decision:** the original #8 RFC also called for `git mv src/new-abm src/simulation` (rename). Deferred to a follow-up PR because it touches `notebooks/datathon_submission.ipynb` (locked submission), `README.md`, `scripts/build_colab_notebook.py`, and `visualization/abm_animation/export_trajectories.py`. That deserves its own focused review with a verification step that File_1/2/3.csv outputs are byte-identical. Tier B (this PR) does the architectural carve-out without touching anything outside `src/`.
+
+---
+
+## 2026-04-25 — Issue #10 implemented: factory call-site migration
+
+All 14 `RoadNode(...)` / `RoadEdge(...)` direct constructions in `municipality_graph.py` migrated to `make_node` / `make_edge` factories. Eager pair validation now active — illegal endpoint kinds raise `GraphVocabError` on the line that wrote them, not at end-of-build. Existing edge-id prefixes (`ROADSEG_`, `GAPBRIDGE_`, `MUNIEND_`, `ANCHORCONNECT_`, `ANCHORLINK_`, `RAWROAD_`, `CONNECTOR_`) preserved verbatim — no CSV consumer breaks.
+
+Relaxed `make_node`'s strict per-kind prefix check: `road_junction` and `road_exchange` share the `JUNC_` id namespace because they come from the same clustering pass and the kind is decided after id mint. End-of-build `validate_network` continues to enforce structural integrity.
+
+89 tests pass (87 → 89: +2 negative pair-validation tests, -1 stale prefix-rejection test).
+
+---
+
 ## 2026-04-25 — Issue #7 implemented: canonical graph vocabulary
 
 Landed `src/new-abm/data_generation/graph_vocab.py` (`NodeKind` / `EdgeKind` closed enums, `NODE_ID_PREFIX` / `EDGE_ID_PREFIX` / `ALLOWED_ENDPOINTS` tables, `make_node` / `make_edge` factories with haversine length fallback and pair validation, `validate_network` for `RoadNetwork`, `validate_graph` for DataFrames, `GraphVocabError`). Replaced all node-kind string literals in `municipality_graph.py` and `spanish_network.py` (49 sites in `spanish_network.py` alone — `"city"` × 47 + `"junction"` × 2). Added `validate_network(network)` calls in both `build_municipality_road_graph` and `build_municipality_calibration_network`. New test file `tests/test_graph_vocab.py` (17 tests); pre-existing `test_municipality_graph.py` unchanged. Total: **87 tests pass**.

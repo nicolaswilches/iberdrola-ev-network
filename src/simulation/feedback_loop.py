@@ -8,7 +8,7 @@ otherwise). Iterate: re-run the ABM with the adjusted stations, observe the
 new peak queues, re-adjust. Stop when no station is adjusted, or after N
 iterations (cap reached).
 
-Iteration outputs are written to src/new-abm/feedback_loop/iter_<i>/ and a
+Iteration outputs are written to src/simulation/feedback_loop/iter_<i>/ and a
 summary log is appended to feedback_loop/log.csv. The original committed
 proposed_stations.csv is restored at the end if --no-commit is passed.
 """
@@ -28,8 +28,8 @@ REPO = Path(__file__).resolve().parents[2]
 PROPOSED = REPO / "data/processed/proposed_stations.csv"
 DEMAND = REPO / "data/processed/demand_per_segment.csv"
 BACKUP = REPO / "data/processed/proposed_stations.backup.csv"
-LOOP_DIR = REPO / "src/new-abm/feedback_loop"
-RUN_DEMO = REPO / "src/new-abm/run_demo.py"
+LOOP_DIR = REPO / "src/simulation/feedback_loop"
+RUN_DEMO = REPO / "src/simulation/run_demo.py"
 PY = Path(sys.executable)
 
 # From src/constants.py

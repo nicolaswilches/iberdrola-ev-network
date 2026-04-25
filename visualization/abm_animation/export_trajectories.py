@@ -36,7 +36,7 @@ from shapely.ops import linemerge, nearest_points, unary_union
 # simulator and the animation exporter. When the ABM's city list or corridor
 # chains change, this file picks up the updates automatically on next run.
 # ---------------------------------------------------------------------------
-_ABM_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "new-abm"
+_ABM_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "simulation"
 if str(_ABM_ROOT) not in sys.path:
     sys.path.insert(0, str(_ABM_ROOT))
 
@@ -1197,7 +1197,7 @@ def main():
     parser = argparse.ArgumentParser(description="Export ABM trajectories for deck.gl animation")
     parser.add_argument(
         "--run-dir", type=Path,
-        default=Path(__file__).parent.parent.parent / "src" / "new-abm" / "feedback_loop" / "iter_02",
+        default=Path(__file__).parent.parent.parent / "src" / "simulation" / "feedback_loop" / "iter_02",
     )
     parser.add_argument(
         "--data-dir", type=Path,
