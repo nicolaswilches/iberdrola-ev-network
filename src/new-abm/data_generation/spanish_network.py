@@ -53,6 +53,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from data_generation.graph_vocab import NodeKind
 from models.demand import ODMatrix, ODPair
 from models.network import RoadEdge, RoadNetwork, RoadNode
 from models.station import ChargingStation
@@ -77,66 +78,66 @@ _NON_MAINLAND_PROVINCES = {"07", "35", "38", "51", "52"}
 # Format: (node_id, display_name, lat, lon, node_type, population)
 _CITY_NODES: List[Tuple] = [
     # Core Spanish cities (all present in synthetic network)
-    ("MAD", "Madrid",                  40.416, -3.703, "city", 3_300_000),
-    ("BCN", "Barcelona",               41.385,  2.173, "city", 1_600_000),
-    ("VAL", "Valencia",                39.470, -0.376, "city",   800_000),
-    ("SEV", "Sevilla",                 37.389, -5.984, "city",   690_000),
-    ("BIL", "Bilbao",                  43.263, -2.935, "city",   350_000),
-    ("ZAR", "Zaragoza",                41.649, -0.887, "city",   670_000),
-    ("MAL", "Málaga",                  36.720, -4.420, "city",   570_000),
-    ("MUR", "Murcia",                  37.983, -1.130, "city",   450_000),
-    ("VLD", "Valladolid",              41.652, -4.724, "city",   300_000),
-    ("ALI", "Alicante",                38.345, -0.490, "city",   330_000),
-    ("GRN", "Granada",                 37.177, -3.599, "city",   230_000),
-    ("COR", "Córdoba",                 37.888, -4.780, "city",   325_000),
-    ("BUR", "Burgos",                  42.344, -3.697, "city",   180_000),
-    ("PMP", "Pamplona",                42.820, -1.644, "city",   200_000),
-    ("SSB", "San Sebastián",           43.321, -1.980, "city",   185_000),
-    ("VIT", "Vitoria-Gasteiz",         42.849, -2.672, "city",   250_000),
-    ("LLE", "Lleida",                  41.617,  0.620, "city",   140_000),
-    ("TAR", "Tarragona",               41.119,  1.245, "city",   135_000),
-    ("CAS", "Castellón de la Plana",   39.987, -0.050, "city",   170_000),
-    ("ALB", "Albacete",                38.995, -1.856, "city",   175_000),
+    ("MAD", "Madrid",                  40.416, -3.703, NodeKind.MUNICIPALITY.value, 3_300_000),
+    ("BCN", "Barcelona",               41.385,  2.173, NodeKind.MUNICIPALITY.value, 1_600_000),
+    ("VAL", "Valencia",                39.470, -0.376, NodeKind.MUNICIPALITY.value,   800_000),
+    ("SEV", "Sevilla",                 37.389, -5.984, NodeKind.MUNICIPALITY.value,   690_000),
+    ("BIL", "Bilbao",                  43.263, -2.935, NodeKind.MUNICIPALITY.value,   350_000),
+    ("ZAR", "Zaragoza",                41.649, -0.887, NodeKind.MUNICIPALITY.value,   670_000),
+    ("MAL", "Málaga",                  36.720, -4.420, NodeKind.MUNICIPALITY.value,   570_000),
+    ("MUR", "Murcia",                  37.983, -1.130, NodeKind.MUNICIPALITY.value,   450_000),
+    ("VLD", "Valladolid",              41.652, -4.724, NodeKind.MUNICIPALITY.value,   300_000),
+    ("ALI", "Alicante",                38.345, -0.490, NodeKind.MUNICIPALITY.value,   330_000),
+    ("GRN", "Granada",                 37.177, -3.599, NodeKind.MUNICIPALITY.value,   230_000),
+    ("COR", "Córdoba",                 37.888, -4.780, NodeKind.MUNICIPALITY.value,   325_000),
+    ("BUR", "Burgos",                  42.344, -3.697, NodeKind.MUNICIPALITY.value,   180_000),
+    ("PMP", "Pamplona",                42.820, -1.644, NodeKind.MUNICIPALITY.value,   200_000),
+    ("SSB", "San Sebastián",           43.321, -1.980, NodeKind.MUNICIPALITY.value,   185_000),
+    ("VIT", "Vitoria-Gasteiz",         42.849, -2.672, NodeKind.MUNICIPALITY.value,   250_000),
+    ("LLE", "Lleida",                  41.617,  0.620, NodeKind.MUNICIPALITY.value,   140_000),
+    ("TAR", "Tarragona",               41.119,  1.245, NodeKind.MUNICIPALITY.value,   135_000),
+    ("CAS", "Castellón de la Plana",   39.987, -0.050, NodeKind.MUNICIPALITY.value,   170_000),
+    ("ALB", "Albacete",                38.995, -1.856, NodeKind.MUNICIPALITY.value,   175_000),
     # Additional cities for corridors with AFIR gaps
-    ("TER", "Teruel",                  40.345, -1.107, "city",    35_000),  # A-23
-    ("ACO", "A Coruña",                43.362, -8.412, "city",   245_000),  # AP-9
-    ("SCQ", "Santiago de Compostela",  42.880, -8.545, "city",    96_000),  # AP-9
-    ("VIG", "Vigo",                    42.232, -8.712, "city",   296_000),  # AP-9
-    ("JAE", "Jaén",                    37.779, -3.790, "city",   117_000),  # N-322
-    ("BAD", "Badajoz",                 38.876, -6.970, "city",   150_000),  # N-433
-    ("MER", "Mérida",                  38.917, -6.342, "city",    58_000),  # N-433 / A-66
-    ("HUE", "Huelva",                  37.261, -6.949, "city",   142_000),  # N-435
-    ("AVL", "Ávila",                   40.657, -4.700, "city",    59_000),  # N-502
-    ("TAL", "Talavera de la Reina",    39.762, -4.829, "city",    89_000),  # N-502
-    ("PAL", "Palencia",                42.010, -4.527, "city",    78_000),  # N-621
-    ("STD", "Santander",               43.463, -3.800, "city",   172_000),  # N-621
-    ("LOG", "Logroño",                 42.466, -2.443, "city",   153_000),  # AP-68
+    ("TER", "Teruel",                  40.345, -1.107, NodeKind.MUNICIPALITY.value,    35_000),  # A-23
+    ("ACO", "A Coruña",                43.362, -8.412, NodeKind.MUNICIPALITY.value,   245_000),  # AP-9
+    ("SCQ", "Santiago de Compostela",  42.880, -8.545, NodeKind.MUNICIPALITY.value,    96_000),  # AP-9
+    ("VIG", "Vigo",                    42.232, -8.712, NodeKind.MUNICIPALITY.value,   296_000),  # AP-9
+    ("JAE", "Jaén",                    37.779, -3.790, NodeKind.MUNICIPALITY.value,   117_000),  # N-322
+    ("BAD", "Badajoz",                 38.876, -6.970, NodeKind.MUNICIPALITY.value,   150_000),  # N-433
+    ("MER", "Mérida",                  38.917, -6.342, NodeKind.MUNICIPALITY.value,    58_000),  # N-433 / A-66
+    ("HUE", "Huelva",                  37.261, -6.949, NodeKind.MUNICIPALITY.value,   142_000),  # N-435
+    ("AVL", "Ávila",                   40.657, -4.700, NodeKind.MUNICIPALITY.value,    59_000),  # N-502
+    ("TAL", "Talavera de la Reina",    39.762, -4.829, NodeKind.MUNICIPALITY.value,    89_000),  # N-502
+    ("PAL", "Palencia",                42.010, -4.527, NodeKind.MUNICIPALITY.value,    78_000),  # N-621
+    ("STD", "Santander",               43.463, -3.800, NodeKind.MUNICIPALITY.value,   172_000),  # N-621
+    ("LOG", "Logroño",                 42.466, -2.443, NodeKind.MUNICIPALITY.value,   153_000),  # AP-68
     # Northern corridor & Galicia interior
-    ("LEO", "León",                    42.599, -5.567, "city",   122_000),  # A-66, A-6, N-120
-    ("OVI", "Oviedo",                  43.362, -5.844, "city",   219_000),  # A-66, A-8
-    ("GIJ", "Gijón",                   43.545, -5.662, "city",   269_000),  # A-8
-    ("PON", "Ponferrada",              42.548, -6.596, "city",    64_000),  # A-6, N-120
-    ("LUG", "Lugo",                    43.012, -7.556, "city",    98_000),  # A-6, A-54
-    ("OUR", "Ourense",                 42.336, -7.864, "city",   105_000),  # A-52, N-120
+    ("LEO", "León",                    42.599, -5.567, NodeKind.MUNICIPALITY.value,   122_000),  # A-66, A-6, N-120
+    ("OVI", "Oviedo",                  43.362, -5.844, NodeKind.MUNICIPALITY.value,   219_000),  # A-66, A-8
+    ("GIJ", "Gijón",                   43.545, -5.662, NodeKind.MUNICIPALITY.value,   269_000),  # A-8
+    ("PON", "Ponferrada",              42.548, -6.596, NodeKind.MUNICIPALITY.value,    64_000),  # A-6, N-120
+    ("LUG", "Lugo",                    43.012, -7.556, NodeKind.MUNICIPALITY.value,    98_000),  # A-6, A-54
+    ("OUR", "Ourense",                 42.336, -7.864, NodeKind.MUNICIPALITY.value,   105_000),  # A-52, N-120
     # Mediterranean & south coast
-    ("GIR", "Girona",                  41.983,  2.824, "city",   103_000),  # AP-7
-    ("ALM", "Almería",                 36.834, -2.463, "city",   200_000),  # A-7, A-92, N-340
-    ("CAR", "Cartagena",               37.605, -0.987, "city",   216_000),  # AP-7, N-340
-    ("ALG", "Algeciras",               36.131, -5.453, "city",   122_000),  # A-7, N-340
-    ("JER", "Jerez",                   36.686, -6.137, "city",   213_000),  # AP-4, A-4
-    ("CDZ", "Cádiz",                   36.529, -6.292, "city",   113_000),  # AP-4, A-4
+    ("GIR", "Girona",                  41.983,  2.824, NodeKind.MUNICIPALITY.value,   103_000),  # AP-7
+    ("ALM", "Almería",                 36.834, -2.463, NodeKind.MUNICIPALITY.value,   200_000),  # A-7, A-92, N-340
+    ("CAR", "Cartagena",               37.605, -0.987, NodeKind.MUNICIPALITY.value,   216_000),  # AP-7, N-340
+    ("ALG", "Algeciras",               36.131, -5.453, NodeKind.MUNICIPALITY.value,   122_000),  # A-7, N-340
+    ("JER", "Jerez",                   36.686, -6.137, NodeKind.MUNICIPALITY.value,   213_000),  # AP-4, A-4
+    ("CDZ", "Cádiz",                   36.529, -6.292, NodeKind.MUNICIPALITY.value,   113_000),  # AP-4, A-4
     # Ruta de la Plata / Extremadura / Castilla
-    ("SAL", "Salamanca",               40.970, -5.664, "city",   143_000),  # A-66, A-62
-    ("CAC", "Cáceres",                 39.476, -6.372, "city",    96_000),  # A-66
-    ("ZAM", "Zamora",                  41.503, -5.744, "city",    61_000),  # A-66
+    ("SAL", "Salamanca",               40.970, -5.664, NodeKind.MUNICIPALITY.value,   143_000),  # A-66, A-62
+    ("CAC", "Cáceres",                 39.476, -6.372, NodeKind.MUNICIPALITY.value,    96_000),  # A-66
+    ("ZAM", "Zamora",                  41.503, -5.744, NodeKind.MUNICIPALITY.value,    61_000),  # A-66
     # Central Spain
-    ("GUA", "Guadalajara",             40.632, -3.163, "city",    87_000),  # A-2, AP-2
-    ("CUE", "Cuenca",                  40.071, -2.137, "city",    54_000),  # A-40
-    ("SEG", "Segovia",                 40.949, -4.117, "city",    51_000),  # AP-6
-    ("SOR", "Soria",                   41.764, -2.468, "city",    39_000),  # N-122, A-15
-    ("CRE", "Ciudad Real",             38.986, -3.927, "city",    75_000),  # A-4, A-41
+    ("GUA", "Guadalajara",             40.632, -3.163, NodeKind.MUNICIPALITY.value,    87_000),  # A-2, AP-2
+    ("CUE", "Cuenca",                  40.071, -2.137, NodeKind.MUNICIPALITY.value,    54_000),  # A-40
+    ("SEG", "Segovia",                 40.949, -4.117, NodeKind.MUNICIPALITY.value,    51_000),  # AP-6
+    ("SOR", "Soria",                   41.764, -2.468, NodeKind.MUNICIPALITY.value,    39_000),  # N-122, A-15
+    ("CRE", "Ciudad Real",             38.986, -3.927, NodeKind.MUNICIPALITY.value,    75_000),  # A-4, A-41
     # Aragón
-    ("HUS", "Huesca",                  42.137, -0.408, "city",    53_000),  # A-23
+    ("HUS", "Huesca",                  42.137, -0.408, NodeKind.MUNICIPALITY.value,    53_000),  # A-23
 ]
 
 _CITY_NODE_MUNICIPALITY_CODES: Dict[str, str] = {
@@ -804,7 +805,7 @@ def _ensure_geo_endpoint_node(
             name=f"{road_name} geometry {suffix.lower()}",
             latitude=lat,
             longitude=lon,
-            node_type="junction",
+            node_type=NodeKind.ROAD_JUNCTION.value,
             population=0,
         )
     )
@@ -874,7 +875,7 @@ def _json_safe(value: object) -> object:
 def _city_node_municipality_frame() -> pd.DataFrame:
     rows = []
     for node_id, display_name, lat, lon, node_type, population in _CITY_NODES:
-        if node_type != "city":
+        if node_type != NodeKind.MUNICIPALITY.value:
             continue
         municipality_code = str(_CITY_NODE_MUNICIPALITY_CODES.get(str(node_id), "")).zfill(5)
         rows.append({
@@ -1626,7 +1627,7 @@ def _build_corridors_and_stations(
                         name=nid,
                         latitude=lat,
                         longitude=lon,
-                        node_type="junction",
+                        node_type=NodeKind.ROAD_JUNCTION.value,
                         population=0,
                     )
                 )

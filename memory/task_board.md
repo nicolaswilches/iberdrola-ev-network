@@ -2,6 +2,17 @@
 
 **Last updated:** 2026-04-24
 
+## Graph architecture refactor
+
+- [x] #7 — canonical `graph_vocab.py` shipped (NodeKind/EdgeKind enums, factories, `validate_network`/`validate_graph`); 87 tests pass; legacy `"city"` / `"junction"` / `"geo"` strings removed
+- [ ] follow-on issue: migrate ~15 `RoadNode(...)` / `RoadEdge(...)` call sites in `municipality_graph.py` to `make_node` / `make_edge` (factories exist + tested but unused in prod)
+- [ ] #8 — relocate graph layer to `src/graph/`, rename `src/new-abm/` → `src/simulation/`
+- [ ] follow-on issue: deepen `_build_stitched_segment_topology` (252-line god function, 5+ concerns) into `src/graph/topology.py`
+- [ ] follow-on issue: collapse `build_municipality_road_graph` and `build_municipality_calibration_network` into one builder with injected inputs
+- [ ] follow-on issue: extract `src/graph/geo_ops.py` (projection/snapping/clustering/haversine scattered across 15+ sites)
+- [ ] add a service-station loader that mints `NodeKind.SERVICE_STATION` nodes (slot reserved in vocab, no producer yet)
+- [ ] after factory migration: run `/tdd` on graph-building; run `/ubiquitous-language` seeded by NodeKind/EdgeKind; run `/grill-me` on the architecture
+
 ## Done
 
 - [x] Fix shared AFIR gap logic so every contiguous route component is checked
