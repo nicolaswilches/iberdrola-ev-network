@@ -5,7 +5,7 @@ Output: notebooks/datathon_submission.ipynb (a build artifact — do not hand-ed
 
 The builder concatenates cells from individual pipeline notebooks into a single
 Colab deliverable, tags every cell with `origin` metadata for audit traceability,
-and materializes src/ + src/new-abm/ via %%writefile cells so judges can read
+and materializes src/ + src/simulation/ via %%writefile cells so judges can read
 every line of our code inline while still being able to re-run the pipeline.
 
 Run:
@@ -178,7 +178,7 @@ else:
     )
 
 sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(REPO / 'src' / 'new-abm'))  # ABM package uses flat imports
+sys.path.insert(0, str(REPO / 'src' / 'simulation'))  # ABM package uses flat imports
 print(f"Repo:     {REPO}")
 print(f"Colab:    {IS_COLAB}")
 print(f"Branch:   new-abm")
@@ -348,7 +348,7 @@ from IPython.display import display, Markdown
 display(Markdown(\"### ABM trip simulation -- 25k agents, 64 corridors\"))
 display(Markdown(
     \"Opens `visualization/abm_animation/index.html` in a new browser tab. \"
-    \"Source run: `src/new-abm/feedback_loop/iter_02/` (final converged 25k-agent iteration). \"
+    \"Source run: `src/simulation/feedback_loop/iter_02/` (final converged 25k-agent iteration). \"
     \"Displayed: 2,000-trip browser-friendly sample; battery SOC colour gradient (red -> amber -> green); \"
     \"charging pauses show as stationary dots with blue pulsing rings; \"
     \"all 64 corridors that the ABM operates on (Level 2b auto-build). \"
@@ -380,7 +380,7 @@ kpi_md = f'''
 | Baseline fast chargers (≥50 kW) | {file1.iloc[0]['total_existing_stations_baseline']:,} |
 
 **ABM feedback loop:** 3 iterations brought STA_0003 (AP-2) from 4 → 6 connectors.
-Evidence lives in `src/new-abm/feedback_loop/iter_00/01/02/` (shown in Section 5).
+Evidence lives in `src/simulation/feedback_loop/iter_00/01/02/` (shown in Section 5).
 '''
 display(Markdown(kpi_md))
 """
@@ -532,7 +532,7 @@ re-run to regenerate from raw.
 **Why `RUN_ABM_FEEDBACK = False` by default:** the loop already ran to
 convergence on the `new-abm` branch and the committed `File_2.csv` already
 reflects the ABM-tuned 28 chargers (STA_0003 4→6). Re-running produces the same
-result and adds ~20 min. Evidence is displayed from `src/new-abm/feedback_loop/`
+result and adds ~20 min. Evidence is displayed from `src/simulation/feedback_loop/`
 in Section 5 without re-execution.
 
 **Why `RUN_NB02 = False` by default:** the brief mandates
@@ -652,7 +652,7 @@ in `constants.py`).
 
 NB07's greedy placer writes `data/processed/proposed_stations.csv` with a
 pre-ABM sizing of **26 chargers** — it satisfies AFIR but cannot observe queue
-dynamics. The feedback loop (`src/new-abm/feedback_loop.py`) reads that file,
+dynamics. The feedback loop (`src/simulation/feedback_loop.py`) reads that file,
 runs an ABM iteration against the 8 proposed stations, and adjusts
 `n_chargers_proposed` within the NB07 regulatory caps
 (`MAX_CHARGERS_HIGH_TRAFFIC=12`, `MAX_CHARGERS_STANDARD=8`).
@@ -663,7 +663,7 @@ then consumed by NB08/09/10 below.
 
 Gated on `RUN_ABM_FEEDBACK`. When False, NB08/09/10 consume whatever
 `proposed_stations.csv` currently holds — 26 after a fresh NB07 run, or 28
-from the committed repo state if NB07 did not run. The full `src/new-abm/`
+from the committed repo state if NB07 did not run. The full `src/simulation/`
 package source and the committed iteration evidence are shown in Section 5.
 """
     abm_cell = """# ABM feedback loop — rewrites proposed_stations.csv with queue-aware charger counts
@@ -671,7 +671,7 @@ if RUN_ABM_FEEDBACK:
     import subprocess
     print("Running ABM feedback loop (3 iterations, 25k agents). ~20 min on Colab CPU.")
     rc = subprocess.run(
-        [sys.executable, 'src/new-abm/feedback_loop.py', '--agents', '25000', '--max-iters', '3'],
+        [sys.executable, 'src/simulation/feedback_loop.py', '--agents', '25000', '--max-iters', '3'],
         cwd=str(REPO),
         check=False,
     )
@@ -689,7 +689,7 @@ else:
         print("Committed proposed_stations.csv (28 chargers) remains in place for NB08/09/10 (also skipped).")
 """
     out.append(md(abm_intro, section="4.8"))
-    out.append(code(abm_cell, section="4.8", origin="src/new-abm/feedback_loop.py"))
+    out.append(code(abm_cell, section="4.8", origin="src/simulation/feedback_loop.py"))
 
     # 4.9–4.11 — NB08..NB10 (post-ABM; gated on RUN_FULL_PIPELINE)
     post_abm = [
@@ -710,14 +710,14 @@ else:
 # -----------------------------------------------------------------------------
 
 def section_5() -> list[nbformat.NotebookNode]:
-    intro = """# Section 5 — ABM feedback loop (`src/new-abm/` audit)
+    intro = """# Section 5 — ABM feedback loop (`src/simulation/` audit)
 
 The loop's **execution step lives in Section 4.8** (between NB07 and NB08),
 so that when `RUN_FULL_PIPELINE=True + RUN_ABM_FEEDBACK=True` the tuned
 `proposed_stations.csv` flows correctly into NB08/09/10 and the final
 `File_1/2/3` match the committed 28-charger submission.
 
-This section (5) is audit-only: it materializes the full `src/new-abm/`
+This section (5) is audit-only: it materializes the full `src/simulation/`
 package tree for inline inspection and displays the committed feedback-loop
 evidence (per-iteration outputs and the convergence log) **without
 re-executing anything** — re-execution is controlled by the flag in 0.4 and
@@ -732,9 +732,9 @@ sized by NB07.
 """
     out: list[nbformat.NotebookNode] = [md(intro, section="5.0")]
 
-    # 5.1 — Walk src/new-abm/ tree and emit writefile cells
-    abm_dir = REPO / "src" / "new-abm"
-    out.append(md("## 5.1 — `src/new-abm/` package tree (audit materialization)", section="5.1"))
+    # 5.1 — Walk src/simulation/ tree and emit writefile cells
+    abm_dir = REPO / "src" / "simulation"
+    out.append(md("## 5.1 — `src/simulation/` package tree (audit materialization)", section="5.1"))
     out += walk_writefiles(abm_dir, section="5.1", include_exts=(".py", ".yaml"))
 
     # 5.2 — Display committed iter_*/summary evidence
@@ -743,7 +743,7 @@ import pandas as pd
 from pathlib import Path as _Path
 from IPython.display import display, Markdown
 
-loop_dir = _Path('src/new-abm/feedback_loop')
+loop_dir = _Path('src/simulation/feedback_loop')
 
 log_csv = loop_dir / 'log.csv'
 if log_csv.exists():

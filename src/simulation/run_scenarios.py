@@ -12,7 +12,7 @@ Scenarios:
   4. high_home_charging — home charging penetration 70% → 95%
 
 Usage:
-    cd src/new-abm
+    cd src/simulation
     python run_scenarios.py [--agents N] [--seed S] [--output-dir DIR]
 """
 

@@ -127,7 +127,7 @@ See [references/sources.md](references/sources.md) for full citations.
 4. **Grid Consolidation** (NB05): Deduplicate 4,990 records → 2,147 physical substations
 5. **Demand Modeling** (NB06): ABM with B1=12% charging probability → chargers per segment
 6. **Network Optimization** (NB07): Greedy AFIR-compliant placement → 8 stations, 28 chargers
-7. **ABM Feedback Loop** (`src/new-abm/feedback_loop.py`): 3 iterations tune `n_chargers_proposed` from observed peak queues → STA_0003 AP-2 raised 4→6 connectors
+7. **ABM Feedback Loop** (`src/simulation/feedback_loop.py`): 3 iterations tune `n_chargers_proposed` from observed peak queues → STA_0003 AP-2 raised 4→6 connectors
 8. **Grid Viability** (NB08): Station↔substation matching → grid_status + friction points
 9. **Output** (NB09): Generate File_1.csv, File_2.csv, File_3.csv
 10. **Visualization** (NB10): Folium interactive map → bi_map.html

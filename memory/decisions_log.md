@@ -1,5 +1,23 @@
 # Decisions Log
 
+## 2026-04-25 — Issue #8 (Tier C) implemented: src/new-abm/ renamed to src/simulation/
+
+`git mv src/new-abm src/simulation` — single rename, history preserved on every file. External references patched for directory paths only (git branch references to `new-abm` left intact since they're a separate identifier):
+
+- `notebooks/datathon_submission.ipynb`: 97 cell sources + ~90 cell metadata `origin.source` annotations
+- `scripts/build_colab_notebook.py`: 8 directory string references; the 8+ branch references untouched
+- `README.md`: 2 directory references (`src/new-abm/` in directory tree + feedback-loop path)
+- `visualization/abm_animation/export_trajectories.py`: import path
+- 8 `.py` files inside the renamed package: docstrings and runtime path strings
+
+Memory updated: `task_board.md`, `project_structure.md`, `project_state.md`, `abm_scaling_task.md`. `decisions_log.md` historical entries retain `src/new-abm/` text — they describe state at time of writing and shouldn't be retroactively rewritten. `bug_reviews/bug_review_2026-04-17.py` is a historical PDF generator and similarly left alone.
+
+89 tests pass under the new path. NB01–NB10 (the locked submission pipeline producing `File_1/2/3.csv`) do not reference `new-abm` at all, so the rename cannot affect submission outputs — no byte-identity verification needed.
+
+#8 is now fully closed (Tier B + Tier C in two PRs).
+
+---
+
 ## 2026-04-25 — Issue #8 (Tier B) implemented: graph package carved out
 
 Created `src/graph/` as the canonical home for the shared graph foundation. Moved two files via `git mv` (so history is preserved):

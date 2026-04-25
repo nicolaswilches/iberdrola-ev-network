@@ -2,7 +2,7 @@
 audit_corridors.py — Verify auto-built road corridors against NB06 demand data.
 
 Usage (from repo root):
-    cd src/new-abm
+    cd src/simulation
     ../../.venv/bin/python tools/audit_corridors.py
     # or with conda:
     /opt/anaconda3/envs/iberdrola_abm/bin/python tools/audit_corridors.py
@@ -20,7 +20,7 @@ import random
 import sys
 from pathlib import Path
 
-# Allow running from repo root or from src/new-abm/
+# Allow running from repo root or from src/simulation/
 _HERE = Path(__file__).resolve().parent
 _NEW_ABM = _HERE.parent
 _REPO_ROOT = _NEW_ABM.parent.parent
