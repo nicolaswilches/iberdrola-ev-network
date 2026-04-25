@@ -6,8 +6,9 @@
 
 - [x] #7 — canonical `graph_vocab.py` shipped (NodeKind/EdgeKind enums, factories, `validate_network`/`validate_graph`); 87 tests pass; legacy `"city"` / `"junction"` / `"geo"` strings removed
 - [x] #10 — call sites migrated; eager pair validation active; 89 tests pass (PR #11)
-- [x] #8 (Tier B) — `src/graph/` package carved out; `network.py` + `vocab.py` moved; backward-compat shims at old paths so 22 consumers keep working unchanged
-- [ ] follow-on: rename `src/new-abm/` → `src/simulation/` and update external references (notebook, scripts, README) — Tier C of the original #8 plan
+- [x] #8 — fully closed:
+  - Tier B: `src/graph/` package carved out; `network.py` + `vocab.py` moved; backward-compat shims at old paths so 22 consumers keep working unchanged (PR #12)
+  - Tier C: `src/new-abm/` renamed to `src/simulation/`; 4 external files patched (notebook, scripts, README, abm animation tool); 6 active memory files updated
 - [ ] follow-on: migrate the 22 `from models.network import` and 3 `from data_generation.graph_vocab import` consumers to canonical `from graph.X import`; delete shims
 - [ ] follow-on issue: deepen `_build_stitched_segment_topology` (252-line god function, 5+ concerns) into `src/graph/topology.py`
 - [ ] follow-on issue: collapse `build_municipality_road_graph` and `build_municipality_calibration_network` into one builder with injected inputs

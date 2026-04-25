@@ -2,7 +2,7 @@
 """Calibrate ABM path demand against segment-level BEV traffic targets.
 
 Example:
-    python src/new-abm/tools/calibrate_path_demand.py \
+    python src/simulation/tools/calibrate_path_demand.py \
       --max-od-pairs 300 --max-paths-per-od 8 --out-dir /tmp/abm_path_calibration
 """
 

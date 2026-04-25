@@ -5,7 +5,7 @@
 
 ## Current state
 
-The original "627k agents" debugging task turned out to be premature because the municipality OD/demand abstraction underneath `src/new-abm/` was too coarse. That foundation has now been partially rebuilt:
+The original "627k agents" debugging task turned out to be premature because the municipality OD/demand abstraction underneath `src/simulation/` was too coarse. That foundation has now been partially rebuilt:
 
 - demand nodes are now municipality-based (`2,435` covered municipalities from the raw OD parquet)
 - municipality people flows are converted explicitly to 2027 BEV trips using:
@@ -20,7 +20,7 @@ This removed the immediate graph-connectivity blocker. The remaining blocker bef
 
 ## Goal
 
-Fix the new ABM (`src/new-abm/`) so it runs correctly at 627,000 agents (matching the real daily BEV demand from `demand_per_segment.csv`).
+Fix the new ABM (`src/simulation/`) so it runs correctly at 627,000 agents (matching the real daily BEV demand from `demand_per_segment.csv`).
 
 **Success criteria:**
 - Strand rate < 5% at 627,000 agents
@@ -111,10 +111,10 @@ Run at increasing agent counts. At each step inspect `outputs/debug_N/baseline_t
 PYTHON=/opt/anaconda3/envs/iberdrola_abm/bin/python
 
 for N in 500 5000 50000 200000 627000; do
-    $PYTHON src/new-abm/run_demo.py \
+    $PYTHON src/simulation/run_demo.py \
         --agents $N \
         --no-plots \
-        --output-dir src/new-abm/outputs/debug_$N
+        --output-dir src/simulation/outputs/debug_$N
 done
 ```
 
@@ -132,9 +132,9 @@ When strand rate jumps between two consecutive levels, the root cause is the fac
 
 | File | Change |
 |---|---|
-| `src/new-abm/data_generation/spanish_network.py` | Fuzzy road name matching; cap connectors at 20; filter infeasible OD pairs (>700 km); increase default `max_clusters` to 6 |
-| `src/new-abm/config/base_config.yaml` | `sim_duration_min: 2880` |
-| `src/new-abm/run_demo.py` | Pass `max_existing_clusters_per_road=8` |
+| `src/simulation/data_generation/spanish_network.py` | Fuzzy road name matching; cap connectors at 20; filter infeasible OD pairs (>700 km); increase default `max_clusters` to 6 |
+| `src/simulation/config/base_config.yaml` | `sim_duration_min: 2880` |
+| `src/simulation/run_demo.py` | Pass `max_existing_clusters_per_road=8` |
 
 ---
 
@@ -142,5 +142,5 @@ When strand rate jumps between two consecutive levels, the root cause is the fac
 
 All ABM work runs in `iberdrola_abm`:
 ```bash
-/opt/anaconda3/envs/iberdrola_abm/bin/python src/new-abm/run_demo.py [args]
+/opt/anaconda3/envs/iberdrola_abm/bin/python src/simulation/run_demo.py [args]
 ```

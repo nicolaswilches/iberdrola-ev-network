@@ -31,7 +31,7 @@ iberdrola-ev-network/
 │   ├── network.py              ✅ RoadNode / RoadEdge / RoadNetwork dataclasses (moved from new-abm/models/)
 │   └── vocab.py                ✅ NodeKind / EdgeKind enums + factories + validators (moved from new-abm/data_generation/)
 │
-├── src/new-abm/                # ABM + municipality calibration workstream
+├── src/simulation/                # ABM + municipality calibration workstream
 │   ├── calibration/
 │   │   └── path_demand.py      ✅ Segment/road OD diagnostics, OD-conservation term, municipality candidate fixes
 │   ├── data_generation/
