@@ -1,5 +1,37 @@
 # Decisions Log
 
+## 2026-04-25 — Issue #7 implemented: canonical graph vocabulary
+
+Landed `src/new-abm/data_generation/graph_vocab.py` (`NodeKind` / `EdgeKind` closed enums, `NODE_ID_PREFIX` / `EDGE_ID_PREFIX` / `ALLOWED_ENDPOINTS` tables, `make_node` / `make_edge` factories with haversine length fallback and pair validation, `validate_network` for `RoadNetwork`, `validate_graph` for DataFrames, `GraphVocabError`). Replaced all node-kind string literals in `municipality_graph.py` and `spanish_network.py` (49 sites in `spanish_network.py` alone — `"city"` × 47 + `"junction"` × 2). Added `validate_network(network)` calls in both `build_municipality_road_graph` and `build_municipality_calibration_network`. New test file `tests/test_graph_vocab.py` (17 tests); pre-existing `test_municipality_graph.py` unchanged. Total: **87 tests pass**.
+
+Only sanctioned schema change: `"geo"` → `"geo_endpoint"` in node_type column of node CSVs.
+
+**Deferred (separate issue):** the ~15 `RoadNode(...)` / `RoadEdge(...)` call sites in `municipality_graph.py` still build dataclasses directly rather than going through `make_node` / `make_edge`. The factories are implemented and tested but unused in production code. Migrating call sites would activate eager pair-validation (catches errors on the line that wrote them); kept out of #7 to limit blast radius on a 1569-line file.
+
+---
+
+## 2026-04-24 — Graph-building architecture review (`/improve-codebase-architecture`)
+
+**Scope:** graph-building phase only (`src/new-abm/data_generation/municipality_graph.py`, graph-facing parts of `spanish_network.py`, `src/new-abm/tools/audit_municipality_road_graph.py`).
+
+**Friction surfaced:**
+- Node-kind strings scattered across 3 files with drift (`"geo"` vs `"geo_endpoint"`, `"city"`/`"junction"` legacy); edge kinds only inferable from id-prefix drift (`ANCHORCONNECT_` vs `ANCHORLINK_`).
+- `_build_stitched_segment_topology` is a 252-line function doing 5+ concerns (endpoint extraction, near-road detection, intersection detection, clustering, segment cutting, gap-bridge emission).
+- Two parallel public builders (`build_municipality_road_graph`, `build_municipality_calibration_network`) with ~80% overlap and subtle drift.
+- IO interleaved with construction — builders cannot be unit-tested on in-memory fixtures.
+- Geospatial primitives (projection, haversine, snapping, clustering) reimplemented at 15+ sites; `geo_utils.haversine_distance` in main `src/` is unused by `new-abm/`.
+- Test coverage ~10%; topology logic untested.
+
+**Decisions:**
+1. First refactor target: canonical node/edge vocabulary. Opened issue [#7](https://github.com/nicolaswilches/iberdrola-ev-network/issues/7). Chose hybrid of two candidate designs: closed `StrEnum`s (static safety + greppability) + factory functions (`make_node` / `make_edge` hiding id-prefix formation, default fields, pair validation, haversine length fallback) + single `validate_graph` seam before `to_csv`. Rejected a registry/plugin design as premature generality — vocabulary changes quarterly, not per-feature, and cross-module kind definitions would hurt greppability.
+2. Directory structure is misaligned. Opened issue [#8](https://github.com/nicolaswilches/iberdrola-ev-network/issues/8) to relocate the graph layer to `src/graph/` (new, concept-named home for `vocab.py`, `topology.py`, `builder.py`, `geo_ops.py`) and rename `src/new-abm/` → `src/simulation/`. Graph-building is a foundation for calibration + optimization + simulation, not an ABM concern; the `new-abm/` name encodes a coupling that does not exist.
+
+**Deferred as separate issues:** topology module extraction, builder unification, geo-primitives consolidation. Listed on the task board so they don't get lost.
+
+**Next session sequence:** land #7 → run `/tdd` on graph-building → run `/ubiquitous-language` seeded by `NodeKind`/`EdgeKind` → run `/grill-me` on the resulting architecture → execute #8 relocation.
+
+---
+
 ## 2026-04-24 — Municipality-native OD calibration refactor in `src/new-abm/`
 
 **Decision:** Stop relying on the coarse 54-hub abstraction for calibration diagnostics and build a municipality-attached demand/routing layer on top of the processed/Hermes road geometry. Keep the current hub-based artifacts available, but move municipality calibration to a stitched graph where municipalities are real nodes and OD demand is sourced from the raw municipality parquet.

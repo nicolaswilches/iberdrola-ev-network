@@ -1,6 +1,6 @@
 # Project State
 
-**Last updated:** 2026-04-24
+**Last updated:** 2026-04-25
 **Status:** Main notebook pipeline remains complete and unchanged. New ABM municipality-demand refactor is now in progress in `src/new-abm/`: official municipality OD input is converted explicitly from people → private-car travelers → vehicle trips → 2027 BEV trips; the municipality-road graph is stitched from processed/Hermes geometry; municipality nodes are attached directly or via anchors; segment/road OD coverage diagnostics and competition diagnostics are exported; and top-1000 municipality OD pairs on the stitched graph now have 100% candidate-path reachability. Calibration quality is still poor because the current sample only covers ~15% of municipality OD demand and candidate diversity is still shallow, so the next work is demand scaling and richer candidate generation rather than more solver tuning.
 
 ## What is done

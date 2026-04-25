@@ -28,6 +28,11 @@ except ModuleNotFoundError:
         INTERURBAN_PRIVATE_CAR_MODE_SHARE,
         INTERURBAN_PRIVATE_VEHICLE_OCCUPANCY,
     )
+from data_generation.graph_vocab import (
+    EdgeKind,
+    NodeKind,
+    validate_network,
+)
 from models.demand import ODMatrix, ODPair
 from models.network import RoadEdge, RoadNetwork, RoadNode
 from data_generation.spanish_network import (
@@ -789,8 +794,8 @@ def _build_stitched_segment_topology(roads_gdf):
     junction_nodes["longitude"] = junction_nodes.geometry.x.astype(float)
     junction_nodes["node_type"] = np.where(
         junction_nodes["road_name_count"] > 1,
-        "road_exchange",
-        "road_junction",
+        NodeKind.ROAD_EXCHANGE.value,
+        NodeKind.ROAD_JUNCTION.value,
     )
     return {
         "junction_nodes": junction_nodes.drop(columns=["geometry"]),
@@ -902,7 +907,7 @@ def build_municipality_calibration_network(
 
     municipalities = municipality_ref.copy()
     municipalities["node_id"] = municipalities["municipality_code"].map(_municipality_node_id)
-    municipalities["node_type"] = "municipality"
+    municipalities["node_type"] = NodeKind.MUNICIPALITY.value
     municipalities["is_mainland"] = ~municipalities["province_code"].astype(str).isin(_NON_MAINLAND_PROVINCES)
     municipalities = _attach_nearest_road_anchor(municipalities, roads)
     municipalities = municipalities.sort_values(
@@ -947,7 +952,7 @@ def build_municipality_calibration_network(
                 name=str(row.nombre),
                 latitude=float(row.latitude),
                 longitude=float(row.longitude),
-                node_type="municipality",
+                node_type=NodeKind.MUNICIPALITY.value,
                 population=population,
             )
         )
@@ -1036,7 +1041,7 @@ def build_municipality_calibration_network(
                         name=anchor_node,
                         latitude=float(row.road_anchor_latitude),
                         longitude=float(row.road_anchor_longitude),
-                        node_type="road_anchor",
+                        node_type=NodeKind.ROAD_ANCHOR.value,
                         population=0,
                     )
                 )
@@ -1114,9 +1119,9 @@ def build_municipality_calibration_network(
         "processed_road_segments": int(len(edge_df)),
         "municipality_nodes": int(len(municipalities)),
         "covered_only": bool(covered_only),
-        "road_junction_nodes": int(sum(1 for node in network.nodes.values() if node.node_type == "road_junction")),
-        "road_exchange_nodes": int(sum(1 for node in network.nodes.values() if node.node_type == "road_exchange")),
-        "road_anchor_nodes": int(sum(1 for node in network.nodes.values() if node.node_type == "road_anchor")),
+        "road_junction_nodes": int(sum(1 for node in network.nodes.values() if node.node_type == NodeKind.ROAD_JUNCTION.value)),
+        "road_exchange_nodes": int(sum(1 for node in network.nodes.values() if node.node_type == NodeKind.ROAD_EXCHANGE.value)),
+        "road_anchor_nodes": int(sum(1 for node in network.nodes.values() if node.node_type == NodeKind.ROAD_ANCHOR.value)),
         "directed_edges": int(network.edge_count),
         "stitched_road_edges": int((~road_edges["is_gap_bridge"].fillna(False)).sum()) if not road_edges.empty else 0,
         "same_road_gap_bridge_edges": int(len(gap_bridges)),
@@ -1140,6 +1145,7 @@ def build_municipality_calibration_network(
         "nearest_road_distance_km_p90": float(municipalities["nearest_road_distance_km"].quantile(0.90)),
         "nearest_road_distance_km_p99": float(municipalities["nearest_road_distance_km"].quantile(0.99)),
     }
+    validate_network(network)
     return network, municipalities, edge_df, summary
 
 
@@ -1202,7 +1208,7 @@ def build_municipality_road_graph(
                 name=str(row.nombre),
                 latitude=float(row.latitude),
                 longitude=float(row.longitude),
-                node_type="municipality",
+                node_type=NodeKind.MUNICIPALITY.value,
                 population=population,
             )
         )
@@ -1236,7 +1242,7 @@ def build_municipality_road_graph(
                         name=node_id,
                         latitude=float(lat),
                         longitude=float(lon),
-                        node_type="geo",
+                        node_type=NodeKind.GEO_ENDPOINT.value,
                         population=0,
                     )
                 )
@@ -1334,7 +1340,7 @@ def build_municipality_road_graph(
                         name=anchor_node_id,
                         latitude=float(row.road_anchor_latitude),
                         longitude=float(row.road_anchor_longitude),
-                        node_type="road_anchor",
+                        node_type=NodeKind.ROAD_ANCHOR.value,
                         population=0,
                     )
                 )
@@ -1414,7 +1420,7 @@ def build_municipality_road_graph(
         "raw_road_segments": int(len(edge_df)),
         "municipality_nodes": int(len(municipalities)),
         "covered_only": bool(covered_only),
-        "geo_nodes": int(sum(1 for node in network.nodes.values() if node.node_type == "geo")),
+        "geo_nodes": int(sum(1 for node in network.nodes.values() if node.node_type == NodeKind.GEO_ENDPOINT.value)),
         "directed_edges": int(network.edge_count),
         "start_exact_polygon_pct": float(100.0 * edge_df["start_assignment_method"].eq("exact_polygon").mean()),
         "end_exact_polygon_pct": float(100.0 * edge_df["end_assignment_method"].eq("exact_polygon").mean()),
@@ -1426,7 +1432,7 @@ def build_municipality_road_graph(
         "municipalities_without_endpoint_attachment": int((~municipalities["has_endpoint_attachment"]).sum()),
         "municipalities_with_nearest_road_anchor": int(municipalities["nearest_road"].fillna("").astype(str).ne("").sum()),
         "municipalities_connected_via_anchor": int(municipalities["has_network_anchor"].sum()),
-        "road_anchor_nodes": int(sum(1 for node in network.nodes.values() if node.node_type == "road_anchor")),
+        "road_anchor_nodes": int(sum(1 for node in network.nodes.values() if node.node_type == NodeKind.ROAD_ANCHOR.value)),
         "roads_with_covered_endpoint_share_pct": float(
             100.0 * (
                 edge_df["start_endpoint_has_covered_municipality"]
@@ -1460,6 +1466,7 @@ def build_municipality_road_graph(
             .to_dict(orient="records")
         ),
     }
+    validate_network(network)
     return network, municipalities, edge_df, summary
 
 
