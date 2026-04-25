@@ -27,7 +27,11 @@ iberdrola-ev-network/
 │   ├── grid_analysis.py        ✅ Grid consolidation + status logic
 │   └── data_loading.py         ✅ CSV / parquet locale helpers
 │
-├── src/new-abm/                # New ABM + municipality calibration workstream
+├── src/graph/                  # Shared graph foundation (issue #8 — Phase 1)
+│   ├── network.py              ✅ RoadNode / RoadEdge / RoadNetwork dataclasses (moved from new-abm/models/)
+│   └── vocab.py                ✅ NodeKind / EdgeKind enums + factories + validators (moved from new-abm/data_generation/)
+│
+├── src/new-abm/                # ABM + municipality calibration workstream
 │   ├── calibration/
 │   │   └── path_demand.py      ✅ Segment/road OD diagnostics, OD-conservation term, municipality candidate fixes
 │   ├── data_generation/
@@ -41,7 +45,8 @@ iberdrola-ev-network/
 │   └── tests/
 │       ├── test_path_demand.py
 │       ├── test_spanish_network_od_prior.py
-│       └── test_municipality_graph.py
+│       ├── test_municipality_graph.py
+│       └── test_graph_vocab.py    # imports from src/graph/, not new-abm
 │
 ├── data/
 │   ├── raw/                    # Original downloads

@@ -8,9 +8,9 @@ import sys
 import pandas as pd
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from data_generation.graph_vocab import (  # noqa: E402
+from graph.vocab import (  # noqa: E402
     ALLOWED_ENDPOINTS,
     EDGE_ID_PREFIX,
     EdgeKind,
@@ -22,7 +22,7 @@ from data_generation.graph_vocab import (  # noqa: E402
     validate_graph,
     validate_network,
 )
-from models.network import RoadEdge, RoadNetwork, RoadNode  # noqa: E402
+from graph.network import RoadEdge, RoadNetwork, RoadNode  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

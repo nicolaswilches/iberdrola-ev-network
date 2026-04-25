@@ -5,8 +5,10 @@
 ## Graph architecture refactor
 
 - [x] #7 — canonical `graph_vocab.py` shipped (NodeKind/EdgeKind enums, factories, `validate_network`/`validate_graph`); 87 tests pass; legacy `"city"` / `"junction"` / `"geo"` strings removed
-- [ ] #10 — migrate ~15 `RoadNode(...)` / `RoadEdge(...)` call sites in `municipality_graph.py` to `make_node` / `make_edge` (factories exist + tested but unused in prod)
-- [ ] #8 — relocate graph layer to `src/graph/`, rename `src/new-abm/` → `src/simulation/`
+- [x] #10 — call sites migrated; eager pair validation active; 89 tests pass (PR #11)
+- [x] #8 (Tier B) — `src/graph/` package carved out; `network.py` + `vocab.py` moved; backward-compat shims at old paths so 22 consumers keep working unchanged
+- [ ] follow-on: rename `src/new-abm/` → `src/simulation/` and update external references (notebook, scripts, README) — Tier C of the original #8 plan
+- [ ] follow-on: migrate the 22 `from models.network import` and 3 `from data_generation.graph_vocab import` consumers to canonical `from graph.X import`; delete shims
 - [ ] follow-on issue: deepen `_build_stitched_segment_topology` (252-line god function, 5+ concerns) into `src/graph/topology.py`
 - [ ] follow-on issue: collapse `build_municipality_road_graph` and `build_municipality_calibration_network` into one builder with injected inputs
 - [ ] follow-on issue: extract `src/graph/geo_ops.py` (projection/snapping/clustering/haversine scattered across 15+ sites)
