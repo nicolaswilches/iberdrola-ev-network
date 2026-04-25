@@ -58,17 +58,22 @@ def test_make_node_sets_canonical_kind_string():
     assert n.population == 3_300_000
 
 
-def test_make_node_rejects_wrong_prefix_for_kind():
-    with pytest.raises(GraphVocabError):
-        make_node(NodeKind.MUNICIPALITY, node_id="JUNC_0001", name="x",
-                  latitude=0.0, longitude=0.0)
-
-
-def test_make_node_accepts_unknown_prefix_verbatim():
+def test_make_node_accepts_any_id_verbatim():
+    """make_node trusts the caller's id; validate_network is the seam."""
     n = make_node(NodeKind.GEO_ENDPOINT, node_id="RAW_LEGACY_42", name="x",
                   latitude=0.0, longitude=0.0)
     assert n.node_id == "RAW_LEGACY_42"
     assert n.node_type == "geo_endpoint"
+
+
+def test_make_node_allows_shared_prefix_across_kinds():
+    """road_junction and road_exchange share the JUNC_ prefix in practice."""
+    j = make_node(NodeKind.ROAD_JUNCTION, node_id="JUNC_0001", name="j",
+                  latitude=0.0, longitude=0.0)
+    e = make_node(NodeKind.ROAD_EXCHANGE, node_id="JUNC_0002", name="e",
+                  latitude=0.0, longitude=0.0)
+    assert j.node_type == "road_junction"
+    assert e.node_type == "road_exchange"
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +108,17 @@ def test_make_edge_rejects_illegal_pair():
     muni = _muni()
     with pytest.raises(GraphVocabError):
         make_edge(EdgeKind.GAP_BRIDGE, muni, _junction())
+
+
+def test_make_edge_rejects_anchor_link_between_two_junctions():
+    """anchor_link must touch a road_anchor or attachment — not two junctions."""
+    with pytest.raises(GraphVocabError):
+        make_edge(EdgeKind.ANCHOR_LINK, _junction("A"), _junction("B", lat=40.5, lon=-3.1))
+
+
+def test_make_edge_rejects_municipality_connector_between_two_junctions():
+    with pytest.raises(GraphVocabError):
+        make_edge(EdgeKind.MUNICIPALITY_CONNECTOR, _junction("A"), _junction("B", lat=40.5, lon=-3.1))
 
 
 def test_anchor_link_allows_municipality_to_anchor():

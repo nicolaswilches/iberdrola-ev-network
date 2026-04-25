@@ -128,22 +128,16 @@ def make_node(
     longitude: float,
     population: int = 0,
 ) -> RoadNode:
-    """Build a ``RoadNode`` whose ``node_type`` is the canonical kind string.
+    """Build a ``RoadNode`` with ``node_type`` set to the canonical kind string.
 
-    ``node_id`` is accepted verbatim — callers already have deterministic id
-    schemes (``MUNI_{code}``, ``GEO_{road}_{seg}_{suffix}``). The factory
-    verifies the id prefix matches the kind when the id starts with a known
-    prefix; otherwise it accepts the id as-is (so legacy ids like
-    ``RAWROAD_...`` keep working).
+    ``node_id`` is accepted verbatim. ``NODE_ID_PREFIX[kind]`` is the canonical
+    prefix to use when minting a fresh id, but the factory does not enforce it
+    on existing ids — some kinds share an id namespace (e.g. road_junction
+    and road_exchange both come from the same clustering pass and use
+    ``JUNC_`` ids), and legacy ids like ``RAWROAD_...`` keep working.
+    Integrity is checked end-of-build by ``validate_network``.
     """
     kind = _as_node_kind(kind)
-    expected_prefix = NODE_ID_PREFIX[kind]
-    if any(node_id.startswith(p) for p in NODE_ID_PREFIX.values()):
-        if not node_id.startswith(expected_prefix):
-            raise GraphVocabError(
-                f"node_id {node_id!r} has a known kind prefix that does not match "
-                f"declared kind {kind.value!r} (expected prefix {expected_prefix!r})"
-            )
     return RoadNode(
         node_id=node_id,
         name=name,
