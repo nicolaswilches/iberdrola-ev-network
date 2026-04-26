@@ -1,5 +1,27 @@
 # Decisions Log
 
+## 2026-04-26 — Recovery: restored `refactor` to PR #14 merge tip after orphaned-commit incident
+
+**Issue:** When the working branch `feat/mip-v2-network-optimization` was renamed to `refactor` and the old name deleted on GitHub, the local branch was at a state from *before* PRs #11–#14 merged on the remote. The push of the renamed branch overwrote the remote's correct tip (`7ab56604` — PR #14's merge commit containing the carve-out + rename), and the subsequent `--delete` of the old remote name removed the only remaining reference to the merged work. The merge commits stayed in the git object database but were unreachable from any branch.
+
+**Recovery:** Tagged the broken `refactor` tip as `backup/refactor-pre-recovery`, then `git reset --hard 7ab56604` to restore the branch to PR #14's merge tip. `src/graph/` and `src/simulation/` are now present; `src/new-abm/` is gone. Force-push needed to overwrite the broken remote.
+
+**Lesson:** After merging PRs upstream from a stack, always `git pull` the working branch *before* renaming or deleting branches. The local branch must be in sync with the remote tip before a push that would overwrite it. A simple `git fetch && git status` before the rename would have surfaced the divergence.
+
+---
+
+## 2026-04-25 — End-of-session branch hygiene
+
+Graph-architecture pass shipped across 5 PRs (#9, #11, #12, #13, #14) and 3 issues closed (#7, #8, #10). After the cascade merged downstream-into-upstream through the stack but stopped before `mip-v2`, opened a "collapse" PR (#14) to fold #12 + #13 into the working branch. Then renamed `feat/mip-v2-network-optimization` → `refactor`. Deleted four stale feature branches.
+
+### Branches preserved on purpose
+
+- `new-abm` — publication snapshot. Frozen at commit `3fd5718`, the exact commit referenced in `notebooks/datathon_submission.ipynb` and used by `scripts/build_colab_notebook.py` (`git clone -b new-abm`). Do not advance or rename — it's the audit reference for the published submission.
+- `fix/abm-od-corridors` — local-only branch with 3 commits not reachable from `refactor` or `main`: `c757b42` (Level 2b auto-build ABM road corridors from geometry), `1899fb8` (memory log of the Level 2b decision), `f1c1740` (bundled prior branch work).
+- `backup-local-main` — local-only safety net.
+
+---
+
 ## 2026-04-25 — Issue #8 (Tier C) implemented: src/new-abm/ renamed to src/simulation/
 
 `git mv src/new-abm src/simulation` — single rename, history preserved on every file. External references patched for directory paths only (git branch references to `new-abm` left intact since they're a separate identifier):
